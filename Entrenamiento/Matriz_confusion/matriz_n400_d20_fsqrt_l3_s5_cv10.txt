@@ -1,0 +1,9 @@
+Reporte de Clasificación - n400_d20_fsqrt_l3_s5_cv10
+              precision    recall  f1-score   support
+
+   No Ataque       1.00      1.00      1.00    443266
+      Ataque       0.98      0.97      0.97     64174
+
+    accuracy                           0.99    507440
+   macro avg       0.99      0.98      0.99    507440
+weighted avg       0.99      0.99      0.99    507440

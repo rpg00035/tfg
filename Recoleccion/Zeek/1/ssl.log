@@ -1,0 +1,25 @@
+#separator \x09
+#set_separator	,
+#empty_field	(empty)
+#unset_field	-
+#path	ssl
+#open	2015-02-20-16-38-46
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	version	cipher	curve	server_name	session_id	last_alert	established	cert_chain_fuids	client_cert_chain_fuids	subject	issuer	client_subject	client_issuer
+#types	time	string	addr	port	addr	port	string	string	string	string	string	string	bool	vector[string]	vector[string]	string	string	string	string
+1424220022.907055	CvuQrN2glXcwndX67	175.45.176.2	30758	149.171.126.11	443	TLSv10	TLS_DHE_RSA_EXPORT_WITH_DES40_CBC_SHA	-	-	5f00000000000000000000000000000000000000000000000000000000000000	-	F	FlFqMb2tvswUdvzWfh	(empty)	-	-	-	-
+1424220108.487400	Cmiouu2vXkL5lE8oV4	175.45.176.1	51510	149.171.126.11	443	TLSv10	TLS_DHE_RSA_WITH_AES_256_CBC_SHA	-	-	-	-	F	-	-	-	-	-	-
+1424220166.430543	C8BiXv2IWTVNzudsr1	175.45.176.0	19767	149.171.126.13	443	TLSv10	TLS_DH_DSS_WITH_3DES_EDE_CBC_SHA	-	-	7100000000000000000000000000000000000000000000000000000000000000	protocol_version	F	F0sOpu2UisTEH1jQi8	(empty)	-	-	-	-
+1424220751.390258	CNgnRv2wopT30wnvr1	175.45.176.1	64963	149.171.126.12	443	SSLv3	TLS_RSA_WITH_RC4_128_MD5	-	-	-	-	T	Fl11U03G7KSKgAUsG6	(empty)	emailAddress=root@localhost.localdomain,CN=localhost.localdomain,OU=SomeOrganizationalUnit,O=SomeOrganization,L=SomeCity,ST=SomeState,C=--	emailAddress=root@localhost.localdomain,CN=localhost.localdomain,OU=SomeOrganizationalUnit,O=SomeOrganization,L=SomeCity,ST=SomeState,C=--	-	-
+1424220757.065353	C3jgpW1wKWTPT1BFUk	175.45.176.1	65525	149.171.126.12	443	SSLv3	TLS_RSA_WITH_RC4_128_MD5	-	-	34c5af695fbedf6c9d6236bd78f49c5e5bfb1671c2663714357f645266d24999	-	T	-	-	-	-	-	-
+1424220763.583542	CcDJCe3eirbuFuSZkb	175.45.176.1	65530	149.171.126.12	443	TLSv10	TLS_RSA_WITH_RC4_128_MD5	-	-	-	-	T	FqqLNS2RNC9TujVVh4	(empty)	emailAddress=root@localhost.localdomain,CN=localhost.localdomain,OU=SomeOrganizationalUnit,O=SomeOrganization,L=SomeCity,ST=SomeState,C=--	emailAddress=root@localhost.localdomain,CN=localhost.localdomain,OU=SomeOrganizationalUnit,O=SomeOrganization,L=SomeCity,ST=SomeState,C=--	-	-
+1424220835.720287	CBjj813SruYU8K79g5	175.45.176.3	39013	149.171.126.16	7002	SSLv3	TLS_RSA_WITH_DES_CBC_SHA	-	-	43c03788628291791b79d3d02eba668c00000000000000000000000000000000	-	T	F5Oc1T1InYDPSNmBG8	(empty)	CN=vrt-bz,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	CN=CertGenCAB,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	-	-
+1424220843.828989	CpoFLv3Jcfg68eg8i3	175.45.176.3	1204	149.171.126.16	7002	SSLv3	TLS_RSA_WITH_DES_CBC_SHA	-	-	8e5d20da7315748ce7bd59d9343f547f00000000000000000000000000000000	-	T	FMqvb81xqN2M6lfQig	(empty)	CN=vrt-bz,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	CN=CertGenCAB,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	-	-
+1424220851.611850	CoETum3sWR8JW6PWX3	175.45.176.3	1177	149.171.126.16	7002	SSLv3	TLS_RSA_WITH_DES_CBC_SHA	-	-	a4199bd42c23e762c44d65f40ec01d1d00000000000000000000000000000000	-	T	Fou6KC17uK0gLYUxc6	(empty)	CN=vrt-bz,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	CN=CertGenCAB,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	-	-
+1424220863.245586	CRmGtu2AeJuMceIjcg	175.45.176.3	53522	149.171.126.16	7002	SSLv3	TLS_RSA_WITH_DES_CBC_SHA	-	-	f8c972d112acec6abc938288ae53e9aa00000000000000000000000000000000	-	T	FSaK9q1vQNSjVHuAge	(empty)	CN=vrt-bz,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	CN=CertGenCAB,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	-	-
+1424220874.064164	CSDy2dln7tS5XmZt5	175.45.176.3	1068	149.171.126.16	7002	SSLv3	TLS_RSA_WITH_DES_CBC_SHA	-	-	0ecc4e35841c4741aadd9b7c02c5886800000000000000000000000000000000	-	T	FphwqZ2dH9l0DWl653	(empty)	CN=vrt-bz,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	CN=CertGenCAB,OU=FOR TESTING ONLY,O=MyOrganization,L=MyTown,ST=MyState,C=US	-	-
+1424221009.969385	Ci1G9B2kvNWZvfR0L1	175.45.176.1	1545	149.171.126.17	443	TLSv10	TLS_RSA_WITH_RC4_128_MD5	-	-	55aeb312a122db69b92bb30804bddce5de0e9ee5f620d1e16bc213d0cdca7f1c	-	F	FE70nW2RXnlKorWTZg	(empty)	-	-	-	-
+1424221209.909843	Cdg6EX2PT4JEc8GcRa	175.45.176.1	20425	149.171.126.15	443	TLSv10	TLS_RSA_EXPORT_WITH_RC2_CBC_40_MD5	-	-	031fd2ad5d4226f852f3a339ba94ae65aa6ff000000000000000000000000000	-	F	FWX2uYsfcgSZzPkxa	(empty)	-	-	-	-
+1424221310.861558	C3GkJI3pLlfSVZdVva	175.45.176.1	6082	149.171.126.19	443	-	-	-	-	-	-	F	-	-	-	-	-	-
+1424221443.779240	CAlkMt2784oZZq8tE2	175.45.176.0	10189	149.171.126.14	443	TLSv10	TLS_DH_RSA_WITH_3DES_EDE_CBC_SHA	-	-	e37357a624edb9184903c540ffaf8e5a2c216f4b697500000000000000000000	-	F	-	-	-	-	-	-
+1424221570.552990	C43oiB318Ujk5IEl08	175.45.176.1	28010	149.171.126.18	443	SSLv3	TLS_RSA_WITH_RC4_128_MD5	-	-	-	-	F	FfNnjL2jDStv6x0iF5	(empty)	-	-	-	-
+#close	2015-02-20-16-41-29

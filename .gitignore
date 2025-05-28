@@ -1,0 +1,4 @@
+venv/
+random_forest_gpu_model.pkl
+*.pcap
+*.csv

@@ -1,0 +1,15 @@
+#separator \x09
+#set_separator	,
+#empty_field	(empty)
+#unset_field	-
+#path	irc
+#open	2025-04-27-23-26-57
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	nick	user	command	value	addl	dcc_file_name	dcc_file_size	dcc_mime_type	fuid
+#types	time	string	addr	port	addr	port	string	string	string	string	string	string	count	string	string
+1424220381.996685	C4aoGn3UrPZXpjZcke	175.45.176.2	58442	149.171.126.17	6667	-	-	NICK	c1QdD7Aag2	-	-	-	-	-
+1424220382.780702	C4aoGn3UrPZXpjZcke	175.45.176.2	58442	149.171.126.17	6667	c1QdD7Aag2	-	USER	c1QdD7Aag2	175.45.176.2 149.171.126.17 c1QdD7Aag2NOTICEPgSVXOQTL1L :\x01VERSION Colloquy 2.0 (2D9) - Mac OS X 10.4.9 - http://colloquy.info\x01 	-	-	-	-
+1424221287.108217	COgWR72m9cPfKXJND9	175.45.176.1	37093	149.171.126.16	50000	-	-	USER	BTzv7hh2SCyri	qG7vlc ZQ81i7RkxwU5gy pQ3TMvSXRnzf	-	-	-	-
+1424221287.108217	COgWR72m9cPfKXJND9	175.45.176.1	37093	149.171.126.16	50000	-	BTzv7hh2SCyri	NICK	WImO	qG7vlc ZQ81i7RkxwU5gy pQ3TMvSXRnzf	-	-	-	-
+1424221436.015651	C5k3tb22LPwz6K8EH6	175.45.176.1	39184	149.171.126.15	6667	-	-	USER	anonym	cnPSOVJejuLDGdXx 149.171.126.15 Anonym	-	-	-	-
+1424221436.015651	C5k3tb22LPwz6K8EH6	175.45.176.1	39184	149.171.126.15	6667	-	anonym	NICK	RyQz	cnPSOVJejuLDGdXx 149.171.126.15 Anonym	-	-	-	-
+#close	2025-04-27-23-27-00

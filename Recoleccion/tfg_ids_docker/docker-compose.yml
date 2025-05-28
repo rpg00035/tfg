@@ -1,0 +1,61 @@
+services:
+  captura-argus:
+    build: ./captura-argus
+    container_name: captura_argus_service
+    network_mode: "host"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - CAPTURE_INTERFACE=enp6s0 
+      - ARGUS_SERVER_PORT=561
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: redis_service
+    networks:
+      - ids_network
+    ports:
+      - "6379:6379" 
+    volumes:
+      - redis_data:/data 
+    # restart: unless-stopped
+
+  procesador-ra-almacen:
+    build: ./procesador-ra-almacen
+    container_name: procesador_ra_almacen_service
+    depends_on:
+      # - captura-argus
+      - redis
+    networks:
+      - ids_network
+    environment:
+      - ARGUS_SERVER_HOST=host.docker.internal
+      - ARGUS_SERVER_PORT=561
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_QUEUE=argus_flow_data
+    # restart: unless-stopped
+
+  detector-ia:
+    build: ./detector-ia
+    container_name: detector_ia_service
+    runtime: nvidia
+    depends_on:
+      - redis
+    networks:
+      - ids_network
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_QUEUE=argus_flow_data
+
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+networks:
+  ids_network:
+    driver: bridge
+
+volumes:
+  redis_data:

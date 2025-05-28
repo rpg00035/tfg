@@ -1,0 +1,9 @@
+Reporte de Clasificación - n500_d25_fsqrt_l2_s3_cv15
+              precision    recall  f1-score   support
+
+      Normal       1.00      1.00      1.00    443109
+      Attack       0.99      0.98      0.98     64329
+
+    accuracy                           1.00    507438
+   macro avg       0.99      0.99      0.99    507438
+weighted avg       1.00      1.00      1.00    507438
