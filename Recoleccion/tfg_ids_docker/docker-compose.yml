@@ -1,61 +1,51 @@
 services:
   captura-argus:
     build: ./captura-argus
-    container_name: captura_argus_service
-    network_mode: "host"
+    container_name: captura_argus_service_vm
+    network_mode: "host" # Usa la red de la VM
     cap_add:
       - NET_ADMIN
       - NET_RAW
     environment:
-      - CAPTURE_INTERFACE=enp6s0 
+      # IMPORTANTE: Verifica el nombre de la interfaz de red principal de tu VM con 'ip a'
+      - CAPTURE_INTERFACE=ens4 
       - ARGUS_SERVER_PORT=561
+    restart: unless-stopped
 
   redis:
     image: redis:6.2-alpine
-    container_name: redis_service
+    container_name: redis_service_vm
     networks:
-      - ids_network
+      - ids_vm_internal_network
     ports:
-      - "6379:6379" 
+      # Expone Redis a todas las interfaces de la VM en el puerto 6379,
+      # para que sea accesible desde tu IP local a través de la IP pública de la VM
+      # (si la regla de firewall de GCP está configurada).
+      - "0.0.0.0:6379:6379" 
     volumes:
-      - redis_data:/data 
-    # restart: unless-stopped
+      - redis_data_vm:/data # Nombre de volumen diferente para no confundir con local si lo hubiera
+    restart: unless-stopped
 
   procesador-ra-almacen:
     build: ./procesador-ra-almacen
-    container_name: procesador_ra_almacen_service
+    container_name: procesador_ra_almacen_service_vm
     depends_on:
-      # - captura-argus
       - redis
     networks:
-      - ids_network
+      - ids_vm_internal_network
     environment:
-      - ARGUS_SERVER_HOST=host.docker.internal
+      # Argus corre en modo host en la misma VM. 
+      # La IP '172.17.0.1' suele ser la interfaz docker0 de la VM. Verifica con 'ip a show docker0' en la VM.
+      - ARGUS_SERVER_HOST=172.17.0.1 
       - ARGUS_SERVER_PORT=561
-      - REDIS_HOST=redis
+      - REDIS_HOST=redis # Se conecta al servicio 'redis' en la misma red Docker
       - REDIS_PORT=6379
       - REDIS_QUEUE=argus_flow_data
-    # restart: unless-stopped
-
-  detector-ia:
-    build: ./detector-ia
-    container_name: detector_ia_service
-    runtime: nvidia
-    depends_on:
-      - redis
-    networks:
-      - ids_network
-    environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_QUEUE=argus_flow_data
-
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    restart: unless-stopped
 
 networks:
-  ids_network:
+  ids_vm_internal_network:
     driver: bridge
 
 volumes:
-  redis_data:
+  redis_data_vm:

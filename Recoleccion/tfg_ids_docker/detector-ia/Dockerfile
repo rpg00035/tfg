@@ -2,27 +2,20 @@
 # Elige una etiqueta compatible con tu GPU, drivers NVIDIA en el host, y la versión de cuML usada en el entrenamiento.
 # Ejemplo: rapidsai/rapidsai-core:23.10-cuda11.8-runtime-ubuntu22.04
 # Consulta https://hub.docker.com/r/rapidsai/rapidsai-core/tags para más opciones.
-FROM rapidsai/rapidsai-core:23.06-cuda11.8-runtime-ubuntu22.04-py3.10
+FROM rapidsai/base:25.02-cuda12.0-py3.12
 
 WORKDIR /app
 
 # 2. Instalar dependencias adicionales.
-# La imagen base de RAPIDS ya incluye Python, cuML, pandas, numpy, joblib, etc.
-# Solo necesitas instalar lo que falte, como redis-py.
-# Puedes usar conda (preferido en entornos RAPIDS) o pip.
-# Eliminar la copia y uso de requirements.txt si era para un entorno de CPU.
-RUN conda install -y -c conda-forge redis-py
-# Si tienes otros paquetes pequeños que solo están en pip y son necesarios:
-# RUN pip install paquete_adicional1 paquete_adicional2
+RUN conda install -y -c conda-forge redis-py && conda clean -afy
+
 
 # 3. Copiar los archivos de tu aplicación
 COPY ml_processor.py .
-COPY random_forest_gpu_model.pkl . # Tu modelo entrenado con cuML
-COPY model_feature_order.json .    # El JSON que define el orden de las características
+COPY random_forest_gpu_model.pkl .
+COPY model_feature_order.json .
 
 # 4. Crear el directorio para los mapas y copiar los mapas
-# Asumiendo que en tu directorio 'detector-ia/' (en el host) tienes una subcarpeta 'string_indexer_maps/'
-# con los siguientes archivos JSON generados por tu script de entrenamiento:
 RUN mkdir -p ./string_indexer_maps
 COPY string_indexer_maps/string_indexer_proto_map.json ./string_indexer_maps/
 COPY string_indexer_maps/string_indexer_state_map.json ./string_indexer_maps/

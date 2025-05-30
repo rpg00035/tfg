@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update -qq && apt-get upgrade -y -qq
+RUN apt-get update -qq 
 RUN apt-get install -y -qq tcpdump
 RUN apt-get install -y -qq argus-server
 RUN apt-get clean && \

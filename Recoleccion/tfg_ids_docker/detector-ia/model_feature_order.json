@@ -26,7 +26,5 @@
     "synack",
     "ackdat",
     "proto_index",
-    "state_index",
-    "srcip_index",
-    "dstip_index"
+    "state_index"
 ]
