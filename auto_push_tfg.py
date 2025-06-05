@@ -31,7 +31,7 @@ from git import Repo, GitCommandError  # GitPython
 DEBOUNCE_DELAY = 2.0
 
 # Extensiones que queremos ignorar (por ejemplo, archivos temporales, swap, etc.):
-IGNORED_EXTS = {'.swp', '.swx', '.tmp', '.pyc', '.log', '.pkl', '.csv'}
+IGNORED_EXTS = {'.swp', '.swx', '.tmp', '.pyc', '.log', '.pkl', '.csv', '.gitignore'}
 
 # Directorios que NO deben vigilarse (por ejemplo, .git, venv, __pycache__, node_modules, etc.)
 IGNORED_PATHS = {'.git', 'venv', '__pycache__', 'node_modules', 'enter'} 

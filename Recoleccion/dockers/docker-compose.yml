@@ -18,7 +18,7 @@ services:
     environment:
       - CAPTURE_INTERFACE=ens4 
       - TCPDUMB_BROADCAST_PORT=5555
-    network_mode: host
+    network_mode: host 
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pgrep socat >/dev/null || exit 1"]
