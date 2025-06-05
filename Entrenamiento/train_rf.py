@@ -27,7 +27,7 @@ spark = SparkSession.builder \
 spark.conf.set("spark.sql.debug.maxToStringFields", 500)
 
 # ─── Cargar dataset ya fusionado ─
-dataset_path = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_definitivo.csv"
+dataset_path = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_balanceado.csv"
 df = spark.read.csv(dataset_path, header=True, inferSchema=True)
 print(f"✅ Dataset cargado desde {dataset_path}")
 
@@ -35,7 +35,7 @@ print(f"✅ Dataset cargado desde {dataset_path}")
 df = df.withColumn("attack_type", when(col("label") == 1, "Attack").otherwise("Normal"))
 
 numeric_features = [
-    "sport", "dsport", "dur", "sbytes", "dbytes", "sttl", "dttl", "sloss", "dloss",
+    "sport", "dport", "dur", "sbytes", "dbytes", "sttl", "dttl", "sloss", "dloss",
     "sload", "dload", "spkts", "dpkts", "stcpb", "dtcpb", "smeansz",
     "dmeansz", "sjit", "djit", "stime", "ltime",
     "sintpkt", "dintpkt", "tcprtt", "synack", "ackdat",
@@ -106,7 +106,13 @@ y_test = test_pd["target"].values.astype(np.int32)
 
 # ─── Configuración de Hiperparámetros (alineado con el primer script) ─────
 param_grid = [
-    {"n_estimators": 750, "max_depth": 35, "max_features": "sqrt", "min_samples_leaf": 1, "min_samples_split": 4}, 
+    {
+        "n_estimators": 300,      
+        "max_depth": 22,           
+        "max_features": "sqrt",    
+        "min_samples_leaf": 9,    
+        "min_samples_split": 6    
+    },
 ]
 
 cv = StratifiedKFold(n_splits=num_folds, shuffle=True, random_state=42)
@@ -142,7 +148,7 @@ best_model = cuRF(
     max_depth=best_params["max_depth"],
     max_features=best_params["max_features"],
     min_samples_leaf=best_params.get("min_samples_leaf", None),
-    min_samples_split=best_params.get("min_samples_split", None)
+    min_samples_split=best_params.get("min_samples_split", None),
 )
 best_model.fit(X_train, y_train)
 
@@ -164,7 +170,7 @@ output_dir = "Matriz_confusion"
 os.makedirs(output_dir, exist_ok=True)
 
 param_str = f"n{best_params['n_estimators']}_d{best_params['max_depth']}_f{best_params['max_features']}_l{best_params.get('min_samples_leaf', 'NA')}_s{best_params.get('min_samples_split', 'NA')}_cv{num_folds}"
-filename_base = os.path.join(output_dir, f"matriz_{param_str}_sin_zeek_fixed") # Modificado nombre base
+filename_base = os.path.join(output_dir, f"matriz_{param_str}_balanceado") # Modificado nombre base
 
 conf_matrix = confusion_matrix(y_test, y_test_pred)
 

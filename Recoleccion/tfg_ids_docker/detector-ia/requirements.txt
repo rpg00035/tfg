@@ -1,6 +1,0 @@
-redis
-pandas
-numpy
-scikit-learn
-joblib
-# Añade otras librerías que tu script necesite (joblib para cargar modelo, etc.)

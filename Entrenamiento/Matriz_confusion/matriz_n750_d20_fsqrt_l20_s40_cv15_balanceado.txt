@@ -1,0 +1,13 @@
+Reporte de Clasificación - n750_d20_fsqrt_l20_s40_cv15
+
+Precisión General en Conjunto de Prueba: 99.20%
+Precisión Específica en Tipos de Ataque (excluyendo 'Normal'): 99.20%
+
+              precision    recall  f1-score   support
+
+      Normal       1.00      0.99      0.99    192678
+      Attack       0.98      0.99      0.98     64215
+
+    accuracy                           0.99    256893
+   macro avg       0.99      0.99      0.99    256893
+weighted avg       0.99      0.99      0.99    256893

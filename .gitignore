@@ -1,4 +1,6 @@
 venv/
-random_forest_gpu_model.pkl
+enter/
+*.pkl
 *.pcap
 *.csv
+*.arff

@@ -1,13 +1,13 @@
 Reporte de Clasificación - n750_d35_fsqrt_l1_s4_cv15
 
-Precisión General en Conjunto de Prueba: 99.50%
-Precisión Específica en Tipos de Ataque (excluyendo 'Normal'): 97.64%
+Precisión General en Conjunto de Prueba: 99.51%
+Precisión Específica en Tipos de Ataque (excluyendo 'Normal'): 97.71%
 
               precision    recall  f1-score   support
 
-      Normal       1.00      1.00      1.00    443104
-      Attack       0.98      0.98      0.98     64332
+      Normal       1.00      1.00      1.00    443252
+      Attack       0.98      0.98      0.98     64276
 
-    accuracy                           0.99    507436
-   macro avg       0.99      0.99      0.99    507436
-weighted avg       0.99      0.99      0.99    507436
+    accuracy                           1.00    507528
+   macro avg       0.99      0.99      0.99    507528
+weighted avg       1.00      1.00      1.00    507528

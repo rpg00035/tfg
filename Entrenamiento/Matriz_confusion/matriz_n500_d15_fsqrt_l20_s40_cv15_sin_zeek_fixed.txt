@@ -1,0 +1,13 @@
+Reporte de Clasificación - n500_d15_fsqrt_l20_s40_cv15
+
+Precisión General en Conjunto de Prueba: 99.41%
+Precisión Específica en Tipos de Ataque (excluyendo 'Normal'): 97.10%
+
+              precision    recall  f1-score   support
+
+      Normal       1.00      1.00      1.00    443252
+      Attack       0.98      0.97      0.98     64276
+
+    accuracy                           0.99    507528
+   macro avg       0.99      0.98      0.99    507528
+weighted avg       0.99      0.99      0.99    507528
