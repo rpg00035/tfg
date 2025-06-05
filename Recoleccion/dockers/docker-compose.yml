@@ -41,7 +41,7 @@ services:
       - ARGUS_INSTANCE=liveargus
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pidof argus >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 561 || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
