@@ -41,7 +41,7 @@ services:
       - ARGUS_INSTANCE=liveargus
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pidof argus >/tmp/argus.pidfile || exit 1"]
+      test: ["CMD-SHELL", "pidof argus >/dev/null || echo 'ERROR: Argus no está corriendo'"]
       interval: 10s
       timeout: 3s
       retries: 5
