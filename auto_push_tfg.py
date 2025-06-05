@@ -263,7 +263,7 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n[✋ Detención solicitada. Parando watcher...]")
-        observer.stop()
+        observer.stop() 
         auto_pusher.stop()
     observer.join() 
 
