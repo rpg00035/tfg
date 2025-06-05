@@ -2,123 +2,163 @@
 """
 auto_push_tfg.py
 
-Este script observa cambios reales en cualquier archivo de la carpeta TFG (excepto rutas o archivos ignorados)
-y, cada vez que detecta una modificación/creación/eliminación/renombrado, hace automáticamente:
-  1. GitPython: git add <rutas_cambiadas>
-  2. GitPython: git commit -m "Auto-commit: <timestamp>"
-  3. GitPython: git push origin <rama_actual>
+Watcher que observa cambios en cualquier archivo de la carpeta TFG (ignorando rutas/archivos configurados),
+y, cada vez que agrupa un lote de cambios, hace:
 
-Ventajas de esta versión:
-- DEBOUNCE_DELAY más bajo (0.5 s) para agrupar menos tiempo.
-- Sólo añade (stage) los ficheros que realmente cambiaron durante el debounce.
-- Así GitPython no recorre todo el índice en cada cambio, ganando velocidad.
+  1. GitPython: git add <rutas pendientes>
+  2. GitPython: git commit -m "Auto-commit: <timestamp>"
+  3. GitPython: git push origin <rama> --quiet
+
+Para que sea más rápido, el 'push' se lanza en un hilo aparte y no bloquea la detección de nuevos cambios.
+
+Uso:
+  $ cd /ruta/a/TFG
+  $ python3 auto_push_tfg.py [<rama>]
+
+Si no indicas rama, se usa la rama actual del repositorio.
 """
 
 import sys
 import os
 import time
 import threading
+from queue import Queue
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from git import Repo, GitCommandError  # GitPython
+from git import Repo, GitCommandError
 
 # --------------------
 # CONFIGURACIÓN
 # --------------------
 
 # Retraso (en segundos) para agrupar cambios seguidos.
-DEBOUNCE_DELAY = 0.5  # medio segundo en lugar de 2 s
+# 0.3 s suele ser suficiente para lotes pequeños y latencia reducida.
+DEBOUNCE_DELAY = 0.3
 
-# Extensiones que queremos ignorar (archivos temporales, swap, etc.):
+# Extensiones que queremos ignorar (archivos temporales, swap, etc.)
 IGNORED_EXTS = {'.swp', '.swx', '.tmp', '.pyc', '.log', '.pkl', '.csv'}
 
-# Directorios que NO deben vigilarse (p. ej. .git, venv, __pycache__, node_modules, etc.)
+# Directorios que NO deben vigilarse (por ejemplo, .git, venv, __pycache__, node_modules, etc.)
 IGNORED_PATHS = {'.git', 'venv', '__pycache__', 'node_modules', 'enter'}
 
-# Archivos concretos que NO deben vigilarse, aunque estén fuera de las carpetas ignoradas:
+# Archivos concretos que NO deben vigilarse, aunque estén fuera de las carpetas ignoradas
 IGNORED_FILES = {'.gitignore'}
 
-# Mensaje base de commit (se añade un timestamp automáticamente):
+# Mensaje base de commit (se añade un timestamp automáticamente)
 BASE_COMMIT_MSG = "Auto-commit TFG"
 
 # --------------------
 # LÓGICA DEL SCRIPT
 # --------------------
 
+class GitWorker(threading.Thread):
+    """
+    Hilo dedicado exclusivamente a hacer push al remoto sin bloquear el watcher.
+    Recibe commits (objetos (paths_a_stage, mensaje)) a través de una cola (Queue) y los procesa.
+    """
+    def __init__(self, repo: Repo, branch: str, queue: Queue):
+        super().__init__(daemon=True)
+        self.repo = repo
+        self.branch = branch
+        self.queue = queue
+        self._stop_event = threading.Event()
+
+    def run(self):
+        while not self._stop_event.is_set():
+            try:
+                # Esperamos hasta 1 segundo para recoger un trabajo; si no hay, seguimos en el bucle
+                task = self.queue.get(timeout=1.0)
+            except:
+                continue  # no llegó nada en el timeout; loop de nuevo
+
+            paths_to_stage, commit_msg = task
+
+            try:
+                # 1) git add <paths_to_stage>
+                self.repo.index.add(paths_to_stage)
+
+                # 2) git commit -m "mensaje"
+                # Si no hay cambios, GitCommandError lanzará "nothing to commit"
+                self.repo.index.commit(commit_msg)
+
+                # 3) git push origin <branch> --quiet
+                origin = self.repo.remote(name='origin')
+                origin.push(self.branch, quiet=True)
+
+                print(f"[✅ Push OK] {commit_msg}  · Archivos: {paths_to_stage}")
+
+            except GitCommandError as e:
+                stderr = e.stderr.strip() if e.stderr else str(e)
+                if "nothing to commit" in stderr.lower():
+                    # Nada que commitear: no es un error crítico
+                    print("[ℹ️  Nada que commitear en este lote.]")
+                else:
+                    print(f"[❌ Error git]:\n  {stderr}")
+
+            finally:
+                self.queue.task_done()
+
+    def stop(self):
+        self._stop_event.set()
+
+
 class GitAutoPusher:
+    """
+    Orquesta la preparación de lotes (paths pendientes) y envía tareas a la GitWorker.
+    """
     def __init__(self, repo_path: str, branch: str = None):
-        # Inicializamos el repositorio con GitPython
         try:
             self.repo = Repo(repo_path)
         except Exception as e:
             print(f"[❌ Error] No es un repositorio Git válido:\n  {e}")
             sys.exit(1)
 
-        # Detectamos la rama actual si no se pasó explícitamente
-        if branch:
-            self.branch = branch
-        else:
-            self.branch = self.repo.active_branch.name
+        # Detectar rama actual si no se recibe como argumento
+        self.branch = branch or self.repo.active_branch.name
 
-        # Ruta absoluta del repo (y forzamos cwd para comandos GitPython)
+        # Ruta absoluta, cambia cwd para GitPython
         self.repo_path = os.path.abspath(repo_path)
         os.chdir(self.repo_path)
 
-        # Conjunto de rutas modificadas pendientes de añadir/commitear
+        # Conjunto de rutas pendientes de añadir
         self.pending_paths = set()
         self._lock = threading.Lock()
+
+        # Cola para comunicar tareas (paths_a_stage, commit_msg) al worker
+        self.queue = Queue()
+
+        # Creamos y arrancamos el worker en background
+        self.git_worker = GitWorker(self.repo, self.branch, self.queue)
+        self.git_worker.start()
+
+        # Timer para debounce
         self._timer = None
 
         print(f"[👀 Watcher iniciado] Repositorio: {self.repo_path} | Rama: {self.branch}")
 
     def _run_git_commands(self):
         """
-        Al disparar el debounce, este método:
-        - Hace 'git add' sólo sobre las rutas que cambiaron.
-        - Si hay cambios efectivamente añadidos, hace commit y push.
-        - Vacía self.pending_paths.
+        Al disparar el debounce, convertimos el conjunto de rutas pendientes en lista,
+        formamos mensaje de commit y lo encolamos para que GitWorker lo procese.
         """
         with self._lock:
             paths_to_stage = list(self.pending_paths)
             self.pending_paths.clear()
-            self._timer = None  # Reiniciamos timer
+            self._timer = None
 
         if not paths_to_stage:
-            # Raro, pero si no hay rutas en la lista, nada que hacer
             return
 
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         commit_msg = f"{BASE_COMMIT_MSG} @ {ts}"
-
-        try:
-            # 1) 'git add <paths>'
-            # GitPython acepta lista de rutas relativas al repo
-            self.repo.index.add(paths_to_stage)
-
-            # 2) 'git commit -m "mensaje"' (arroja GitCommandError si no hay nada nuevo)
-            self.repo.index.commit(commit_msg)
-
-            # 3) 'git push origin <branch>'
-            origin = self.repo.remote(name='origin')
-            origin.push(self.branch)
-
-            print(f"[✅ Push ejecutado] {commit_msg}")
-            print(f"    · Rutas incluidas: {paths_to_stage}")
-
-        except GitCommandError as e:
-            # Si no hay nada que commitear (p.ej., sólo eliminaste algo que ya estaba borrado),
-            # GitCommandError suele contener "nothing to commit"
-            msg = e.stderr.strip() if e.stderr else str(e)
-            if "nothing to commit" in msg.lower():
-                print("[ℹ️  Nada que commitear en este momento.]")
-            else:
-                print(f"[❌ Error al hacer push]:\n  {msg}")
+        # Encolamos directamente la tarea; el worker la recogerá y hará push asincrónico
+        self.queue.put((paths_to_stage, commit_msg))
 
     def schedule_push_for(self, path: str):
         """
-        Agrega 'path' a pending_paths y reprograma el timer de debounce.
+        Añade 'path' a pending_paths y reinicia el timer debounce.
         """
-        rel = os.path.relpath(path, self.repo_path)  # ruta relativa al repo
+        rel = os.path.relpath(path, self.repo_path)
         with self._lock:
             self.pending_paths.add(rel)
             if self._timer:
@@ -127,33 +167,34 @@ class GitAutoPusher:
             self._timer.start()
 
     def stop(self):
-        """Detiene el timer si está activo."""
+        """
+        Detiene el timer y el worker.
+        """
         with self._lock:
             if self._timer:
                 self._timer.cancel()
                 self._timer = None
+        self.git_worker.stop()
+        self.git_worker.join()
+
 
 class ChangeHandler(FileSystemEventHandler):
+    """
+    Manejador de eventos de watchdog que, ante creación/modificación/borrado/renombrado,
+    decide si ignorar o encolar la ruta para commit/push.
+    """
     def __init__(self, auto_pusher: GitAutoPusher):
         self.auto_pusher = auto_pusher
 
     def _should_ignore(self, path: str) -> bool:
-        """
-        Comprueba si la ruta (path) debe ignorarse:
-        - Contiene algún directorio de IGNORED_PATHS en su ruta.
-        - Coincide exactamente con un nombre de IGNORED_FILES.
-        - Tiene extensión en IGNORED_EXTS.
-        """
-        # 1. ¿Está dentro de una carpeta a ignorar?
+        # 1. ¿Está dentro de alguna carpeta ignorada?
         for ign in IGNORED_PATHS:
-            # Ejemplo: "/home/ruben/TFG/.git/config" → contiene "/.git/"
             if os.path.sep + ign + os.path.sep in path:
                 return True
-            # Si el cambio es exactamente el directorio (p.ej. renombrar .git)
             if path.endswith(os.path.sep + ign) or path.startswith(ign + os.path.sep):
                 return True
 
-        # 2. ¿Es un archivo a ignorar?
+        # 2. ¿Coincide con un archivo a ignorar?
         base = os.path.basename(path)
         if base in IGNORED_FILES:
             return True
@@ -169,7 +210,6 @@ class ChangeHandler(FileSystemEventHandler):
         if event.is_directory: return
         if self._should_ignore(event.src_path): return
 
-        # Sólo cuando cambia de verdad el contenido, no al abrir/cerrar sin modificar
         print(f"[🟡 Modificado] {event.src_path}")
         self.auto_pusher.schedule_push_for(event.src_path)
 
@@ -188,21 +228,20 @@ class ChangeHandler(FileSystemEventHandler):
         self.auto_pusher.schedule_push_for(event.src_path)
 
     def on_moved(self, event):
-        # Si un archivo se renombra o se mueve dentro del repo:
         if event.is_directory: return
 
         src, dst = event.src_path, event.dest_path
-        # Si tanto origen como destino son ignorados, no hacemos nada.
+        # Si tanto origen como destino están ignorados, no encolamos nada
         if self._should_ignore(src) and self._should_ignore(dst):
             return
 
         print(f"[🟠 Movido]   {src} --> {dst}")
-        # Agregamos ambas rutas a pending_paths, para que Git sepa borrarlo y/o añadirlo:
         self.auto_pusher.schedule_push_for(src)
         self.auto_pusher.schedule_push_for(dst)
 
+
 def main():
-    # Obtenemos la ruta del repositorio (por defecto, cwd) y la rama (opcional)
+    # Validación de argumentos (rama opcional)
     if len(sys.argv) > 2:
         print("Uso: python3 auto_push_tfg.py [<nombre_de_rama>]")
         sys.exit(1)
@@ -210,24 +249,24 @@ def main():
     branch_arg = sys.argv[1] if len(sys.argv) == 2 else None
     repo_path = os.getcwd()
 
-    # Creamos el objeto que hará los pushes
+    # Creamos el auto-pusher
     auto_pusher = GitAutoPusher(repo_path, branch_arg)
 
-    # Configuramos el observer de watchdog
+    # Montamos watchdog
     observer = Observer()
     handler = ChangeHandler(auto_pusher)
     observer.schedule(handler, path=repo_path, recursive=True)
 
     try:
         observer.start()
-        # Bucle infinito: interrumpe con Ctrl+C
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n[✋ Detención solicitada. Parando watcher...]")
         observer.stop()
         auto_pusher.stop()
-    observer.join()  
+    observer.join()
+
 
 if __name__ == "__main__":
     main()
