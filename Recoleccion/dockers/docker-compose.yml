@@ -16,7 +16,7 @@ services:
     container_name: contenedor_capturar_tcpdump
     cap_add: [NET_ADMIN, NET_RAW]
     environment:
-      - CAPTURE_INTERFACE=ens4
+      - CAPTURE_INTERFACE=ens4 
       - TCPDUMB_BROADCAST_PORT=5555
     network_mode: host
     restart: unless-stopped
