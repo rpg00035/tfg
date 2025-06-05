@@ -227,7 +227,7 @@ def main():
         print("\n[✋ Detención solicitada. Parando watcher...]")
         observer.stop()
         auto_pusher.stop()
-    observer.join()
+    observer.join() 
 
 if __name__ == "__main__":
     main()
