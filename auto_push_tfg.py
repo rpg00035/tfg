@@ -2,8 +2,8 @@
 """
 auto_push_tfg.py
 
-Este script observa cambios en cualquier archivo de la carpeta TFG (excepto rutas ignoradas)
-y, cada vez que detecta una modificación, hace automáticamente:
+Este script observa cambios reales en cualquier archivo de la carpeta TFG (excepto rutas o archivos ignorados)
+y, cada vez que detecta una modificación/creación/eliminación/renombrado, hace automáticamente:
   1. GitPython: git add .
   2. GitPython: git commit -m "Auto-commit: <timestamp>"
   3. GitPython: git push origin <rama_actual>
@@ -31,10 +31,13 @@ from git import Repo, GitCommandError  # GitPython
 DEBOUNCE_DELAY = 2.0
 
 # Extensiones que queremos ignorar (por ejemplo, archivos temporales, swap, etc.):
-IGNORED_EXTS = {'.swp', '.swx', '.tmp', '.pyc', '.log', '.pkl', '.csv', '.gitignore'}
+IGNORED_EXTS = {'.swp', '.swx', '.tmp', '.pyc', '.log', '.pkl', '.csv'}
 
 # Directorios que NO deben vigilarse (por ejemplo, .git, venv, __pycache__, node_modules, etc.)
-IGNORED_PATHS = {'.git', 'venv', '__pycache__', 'node_modules', 'enter'} 
+IGNORED_PATHS = {'.git', 'venv', '__pycache__', 'node_modules', 'enter'}
+
+# Archivos concretos que NO deben vigilarse, aunque estén fuera de las carpetas ignoradas:
+IGNORED_FILES = {'.gitignore'}
 
 # Mensaje base de commit (se añadirá un timestamp automáticamente):
 BASE_COMMIT_MSG = "Auto-commit TFG"
@@ -112,25 +115,69 @@ class ChangeHandler(FileSystemEventHandler):
     def __init__(self, auto_pusher: GitAutoPusher):
         self.auto_pusher = auto_pusher
 
-    def on_any_event(self, event):
-        # Si es un directorio, lo ignoramos
+    def _should_ignore(self, path: str) -> bool:
+        """
+        Comprueba si la ruta (path) debe ignorarse:
+        - Está dentro de alguna ruta de IGNORED_PATHS.
+        - Es un archivo dentro de IGNORED_FILES.
+        - Tiene extensión dentro de IGNORED_EXTS.
+        """
+        # 1. Si contiene un directorio ignorado en algún nivel
+        for ign in IGNORED_PATHS:
+            if os.path.sep + ign + os.path.sep in path:
+                return True
+            if path.endswith(os.path.sep + ign) or path.startswith(ign + os.path.sep):
+                return True
+
+        # 2. Si coincide exactamente con un archivo a ignorar
+        base = os.path.basename(path)
+        if base in IGNORED_FILES:
+            return True
+
+        # 3. Extensiones a ignorar
+        _, ext = os.path.splitext(path)
+        if ext.lower() in IGNORED_EXTS:
+            return True
+
+        return False
+
+    def on_modified(self, event):
         if event.is_directory:
             return
-
-        # Ignoramos rutas que contengan alguno de los directorios en IGNORED_PATHS
-        for ign in IGNORED_PATHS:
-            if os.path.sep + ign + os.path.sep in event.src_path:
-                return
-            if event.src_path.endswith(os.path.sep + ign) or event.src_path.startswith(ign + os.path.sep):
-                return
-
-        # Ignoramos extensiones no deseadas
-        _, ext = os.path.splitext(event.src_path)
-        if ext.lower() in IGNORED_EXTS:
+        if self._should_ignore(event.src_path):
             return
 
-        # Si se crea/modifica/elimina/mueve un archivo relevante, disparar el auto-push
-        print(f"[🟡 Detectado cambio] {event.event_type}: {event.src_path}")
+        print(f"[🟡 Modificado] {event.src_path}")
+        self.auto_pusher.schedule_push()
+
+    def on_created(self, event):
+        if event.is_directory:
+            return
+        if self._should_ignore(event.src_path):
+            return
+
+        print(f"[🟢 Creado]   {event.src_path}")
+        self.auto_pusher.schedule_push()
+
+    def on_deleted(self, event):
+        if event.is_directory:
+            return
+        if self._should_ignore(event.src_path):
+            return
+
+        print(f"[🔴 Borrado]  {event.src_path}")
+        self.auto_pusher.schedule_push()
+
+    def on_moved(self, event):
+        # Mover (renombrar) también cuenta
+        if event.is_directory:
+            return
+        if self._should_ignore(event.dest_path) and self._should_ignore(event.src_path):
+            # Si se mueve _dentro_ de una ruta ignorada o se renombra a un nombre ignorado,
+            # lo saltamos. Pero si se mueve desde un lugar válido a uno válido, no se ignora.
+            return
+
+        print(f"[🟠 Movido]   {event.src_path} --> {event.dest_path}")
         self.auto_pusher.schedule_push()
 
 def main():

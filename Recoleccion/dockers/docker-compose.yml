@@ -7,7 +7,7 @@ services:
       - "6379:6379"
     volumes:
       - redis_data_vm:/data
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"]
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"] 
     restart: unless-stopped
 
   # 2. Captura de tráfico con tcpdump
