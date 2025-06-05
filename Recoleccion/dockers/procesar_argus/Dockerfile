@@ -3,7 +3,7 @@ FROM debian:bullseye-slim
 # Instalar dependencias y Argus
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    argus-server socat pidof \
+    argus-server socat procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY wait-for-it.sh /app/wait-for-it.sh 
