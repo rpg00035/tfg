@@ -15,7 +15,7 @@ services:
     build: ./capturar_tcpdump
     container_name: contenedor_capturar_tcpdump
     cap_add: [NET_ADMIN, NET_RAW]
-    environment:
+    environment: 
       - CAPTURE_INTERFACE=ens4 
       - TCPDUMB_BROADCAST_PORT=5555
     network_mode: host 
