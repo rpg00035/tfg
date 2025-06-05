@@ -41,7 +41,7 @@ services:
       - ARGUS_INSTANCE=liveargus
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pgrep argus >/dev/null"]
+      test: ["CMD-SHELL", "pidof argus >/dev/null || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
