@@ -9,4 +9,4 @@ ARGUS_PORT=${ARGUS_PORT:-561}
 
 echo "[Argus] conectado a ${TCPDUMP_HOST}:${TCPDUMP_PORT}"
 
-socat -u TCP:${TCPDUMP_HOST}:${TCPDUMP_PORT} - | argus -r - -P ${ARGUS_PORT} -m -w -
+socat -u TCP:${TCPDUMP_HOST}:${TCPDUMP_PORT} - | argus -r - -P ${ARGUS_PORT} -m -w - 2> /var/log/argus.err
