@@ -3,13 +3,14 @@ import numpy as np
 import pandas.api.types
 
 # --- Configuración ---
-ruta_csv = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_definitivo_filtrado.csv"  # Ruta de tu dataset
+ruta_csv = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_definitivo.csv"  # Ruta de tu dataset
 output_stats_general_csv = "estadisticas_generales_dataset.csv"
 output_stats_short_flows_csv = "estadisticas_flujos_cortos_especificos.csv"
 output_protocolos_csv = "protocolos_detectados_entrenamiento.csv"
 output_states_csv = "states_detectados_entrenamiento.csv"
 output_label_distribution_csv = "distribucion_label.csv"
 output_attack_category_csv = "categorias_ataque_detectadas_entrenamiento.csv"
+output_http_features_csv = "estadisticas_http_features.csv"
 
 
 numeric_cols_to_analyze = [
@@ -19,7 +20,7 @@ numeric_cols_to_analyze = [
     "stime", "ltime", "sintpkt", "dintpkt", "tcprtt", "synack", "ackdat"
 ]
 
-# 
+http_features = ["trans_depth", "response_body_len", "ct_flw_http_mthd"] 
 short_flow_features_to_analyze = ["sjit", "djit", "sintpkt", "dintpkt"]
 max_packets_for_short_flow_analysis = 3
 
@@ -235,5 +236,41 @@ else:
         print(f"\n📁 Guardado: {output_stats_short_flows_csv}")
     else:
         print("ℹ️ No se generaron estadísticas para flujos cortos (posiblemente por falta de datos o columnas adecuadas).")
+
+for col in http_features:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    else:
+        print(f"⚠️ No se encontró la columna '{col}' en el dataset.")
+
+# 2) Calculamos describe con percentiles útiles
+existing_http = [col for col in http_features if col in df.columns]
+if existing_http:
+    desc_http = df[existing_http] \
+        .describe(percentiles=[.01, .05, .25, .5, .75, .95, .99]) \
+        .transpose()
+
+    # 3) Contamos ceros, -1 y NaN
+    ext_stats = []
+    for col in existing_http:
+        ser = df[col]
+        ext_stats.append({
+            "zeros_count":       (ser == 0).sum(),
+            "zeros_pct":         (ser == 0).mean() * 100,
+            "minus_ones_count":  (ser == -1).sum(),
+            "minus_ones_pct":    (ser == -1).mean() * 100,
+            "nan_count":         ser.isna().sum(),
+            "nan_pct":           ser.isna().mean() * 100,
+        })
+    ext_df = pd.DataFrame(ext_stats, index=existing_http)
+
+    # 4) Unimos y guardamos
+    http_stats = pd.concat([desc_http, ext_df], axis=1)
+    print(http_stats)
+    http_stats.to_csv(output_http_features_csv)
+    print(f"📁 Guardado: {output_http_features_csv}")
+else:
+    print("❌ Ninguna de las columnas HTTP específicas está disponible para analizar.")
+
 
 print("\n✅ Análisis estadístico completado.")

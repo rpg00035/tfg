@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+
+
 import cupy as cp, rmm, joblib, json, os, sys, signal, time, redis, ipaddress, requests
 from threading import Thread
 from queue import Queue, Empty
@@ -6,14 +8,14 @@ from datetime import datetime
 import numpy as np
 
 # ══════════════════════════════ CONFIG ═══════════════════════════════
-REDIS_HOST       = os.getenv("ML_REDIS_HOST", "34.175.93.114")
+REDIS_HOST       = os.getenv("ML_REDIS_HOST", "34.175.47.103")
 REDIS_PORT       = int(os.getenv("ML_REDIS_PORT", 6379))
-REDIS_QUEUE_NAME = os.getenv("ML_REDIS_QUEUE", "full_flow_data")
+REDIS_QUEUE_NAME = os.getenv("ML_REDIS_QUEUE", "merge_data_stream")
 
 CSV_COLUMNS = (
     "stime,proto,saddr,sport,daddr,dport,state,ltime,spkts,dpkts,sbytes,dbytes,"
     "sttl,dttl,sload,dload,sloss,dloss,sintpkt,dintpkt,sjit,djit,stcpb,dtcpb,"
-    "tcprtt,synack,ackdat,smeansz,dmeansz,dur"
+    "tcprtt,synack,ackdat,smeansz,dmeansz,dur,"
     "ct_state_ttl,ct_flw_http_mthd,is_ftp_login,ct_ftp_cmd,"
     "ct_srv_src,ct_srv_dst,ct_dst_ltm,ct_src_ltm,"
     "ct_src_dport_ltm,ct_dst_sport_ltm,ct_dst_src_ltm" 
@@ -87,8 +89,6 @@ def load_artifacts():
     for cat in CATEGORICAL_COLS:
         str_maps[cat] = json.load(
             open(f"string_indexer_maps/string_indexer_{cat}_map.json"))
-
-    print("[INFO] Modelo pequeño cargado (50 árboles, profundidad 10).")
 
     try:
         fil_model = rf_cuml.convert_to_fil(
@@ -218,7 +218,9 @@ def process_batch(lines):
         except ValueError:
             latency = 0.0
 
+        
         reason = ""
+        
         if sip == "169.254.169.254" or dip == "169.254.169.254":
             reason = "Meta"
         elif ip_in_net("gcloud", sip) or ip_in_net("gcloud", dip):

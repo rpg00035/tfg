@@ -1,12 +1,13 @@
 #!/bin/sh
 set -e
 
-TCPDUMP_HOST=${TCPDUMP_HOST:-127.0.0.1}
-TCPDUMP_PORT=${TCPDUMP_BROADCAST_PORT:-5555}
+CAPTURE_IF=${CAPTURE_INTERFACE:-ens3} 
 ARGUS_PORT=${ARGUS_PORT:-561}
 
-/app/wait-for-it.sh "${TCPDUMP_HOST}:${TCPDUMP_PORT}" -t 30
+sleep 5
 
-echo "[Argus] conectado a ${TCPDUMP_HOST}:${TCPDUMP_PORT}"
+echo "[Argus] Arrancando argus-server en primer plano."
+echo "[Argus] Capturando de la interfaz: ${CAPTURE_IF}"
+echo "[Argus] Escuchando conexiones de clientes (ra) en el puerto: ${ARGUS_PORT}"
 
-socat -u TCP:${TCPDUMP_HOST}:${TCPDUMP_PORT} - | argus -r - -P ${ARGUS_PORT} -m -w - > /dev/null 2>&1 
+taskset -c 1 argus -i "${CAPTURE_IF}" -P "${ARGUS_PORT}"

@@ -22,7 +22,7 @@ else
 fi
 
 echo "🚀 Levantando contenedores..."
-$COMPOSE up -d --remove-orphans
+$COMPOSE up -d 
 
 echo "✅ Contenedores activos. Logs (tail=$TAIL): Ctrl-C para salir."
 echo "──────────────────────────────────────────────────────────────"

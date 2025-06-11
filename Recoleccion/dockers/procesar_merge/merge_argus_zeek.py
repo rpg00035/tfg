@@ -1,348 +1,443 @@
-import json
-import csv
+#!/usr/bin/env python3
+"""
+merge_argus_zeek_v2.py  —  Fusiona en caliente los flujos de Argus y Zeek.
+-----------------------------------------------------------------------
+• Consume dos colas Redis (Argus y Zeek) tal y como ya hacía el script
+  original.
+• Correlaciona los eventos usando la clave compuesta
+      (stime≈ts, proto, saddr, sport, daddr, dport),
+  tolerando ±1e-4 s entre stime (Argus) y ts (Zeek).
+• Al encontrar match:
+    → Parte del JSON de Argus y añade:
+         service (si existe en Zeek o "-"),
+         ct_srv_src, ct_srv_dst, ct_dst_ltm, ct_src_ltm,
+         ct_src_dport_ltm, ct_dst_sport_ltm, ct_dst_src_ltm
+    → Escribe el resultado en <OUTPUT_DIR>/merge/<ts>/merge_conn.jsonl
+• Sin match inmediato:
+    → Guarda el mensaje en la cola circular correspondiente
+      (tamaño configurable, p.e. 100 000).
+• Vuelve a intentar correlacionar cada vez que llega un nuevo mensaje.
+
+Dependencias: redis, python-dateutil.
+"""
+from __future__ import annotations
+
+import argparse, collections, json, logging, os, sys, time
+from typing import Deque, Any, Dict, Optional, Tuple
+from collections import Counter, deque
+
 import redis
-import os
-import argparse
-from collections import defaultdict
-import logging
-import time # Para la tolerancia en timestamps
+from dateutil import parser as dtparser
 
-# Configuración del Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Columnas CSV que espera tu consumidor (igual que CSV_COLUMNS en tu script Python)
+ML_CSV_COLUMNS = (
+    "stime,proto,saddr,sport,daddr,dport,state,ltime,spkts,dpkts,sbytes,dbytes,"
+    "sttl,dttl,sload,dload,sloss,dloss,sintpkt,dintpkt,sjit,djit,stcpb,dtcpb,"
+    "tcprtt,synack,ackdat,smeansz,dmeansz,dur,ct_state_ttl,ct_flw_http_mthd,"
+    "is_ftp_login,ct_ftp_cmd,ct_srv_src,ct_srv_dst,ct_dst_ltm,ct_src_ltm,"
+    "ct_src_dport_ltm,ct_dst_sport_ltm,ct_dst_src_ltlm"
+)
+ML_COLS = ML_CSV_COLUMNS.split(',')
 
-# --- Configuración ---
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-MERGED_DATA_REDIS_KEY = os.getenv("FULL_QUEUE", "pipeline_merged_flow_data")
-MODEL_FEATURE_ORDER_FILE = "model_feature_order.json" # Asumiendo que está en el mismo dir que el script
+# --- Configurables -----------------------------------------------------------
+LAST_100: Deque[dict] = deque(maxlen=100)
 
-# Tolerancia para el matching de timestamps (en segundos)
-TIMESTAMP_MATCH_TOLERANCE = 2.0
+Key5 = Tuple[Any, Any, Any, Any, Any]
+MAP_COUNT_HTTP: Counter[Key5, int] = Counter()
+MAP_COUNT_FTP: Counter[Key5, int] = Counter()
+HTTP_ACC: dict[Key5, dict] = {}
 
-# Campos esperados del CSV de Argus (ajusta según tu comando 'ra -s ...')
-# Si 'ra' NO usa la opción '-n', la primera línea del CSV será la cabecera y DictReader la usará.
-# Si 'ra -n' SÍ se usa, debes definir los nombres de campo aquí en el orden correcto.
-ARGUS_FIELD_NAMES = [
-    "stime", "dur", "proto", "saddr", "sport", "dir", "daddr", "dport",
-    "pkts", "bytes", "state", "flgs", "sttl", "dttl", "sloss", "dloss",
-    "sload", "dload", "spkts", "dpkts", "stcpb", "dtcpb", "smeansz",
-    "dmeansz", "sjit", "djit", "ltime", "sintpkt", "dintpkt",
-    "tcprtt", "synack", "ackdat"
-] # Asegúrate de que esto refleje la salida de tu comando `ra`.
+ZEOK_EXTRA = (
+    "ct_srv_src","ct_srv_dst","ct_dst_ltm","ct_src_ltm",
+    "ct_src_dport_ltm","ct_dst_sport_ltm","ct_dst_src_ltm",
+)
 
-# --- Funciones Auxiliares ---
+OUTPUT_FIELDS = [
+    "saddr","sport","daddr","dport","proto","state","dur","sbytes","dbytes",
+    "sttl","dttl","sloss","dloss","service","sload","dload","spkts","dpkts",
+    "stcpb","dtcpb","smeansz","dmeansz","trans_depth","response_body_len","sjit",
+    "djit","stime","ltime","sintpkt","dintpkt","tcprtt","synack","ackdat",
+    "is_sm_ips_ports","ct_flw_http_mthd","is_ftp_login","ct_ftp_cmd","ct_srv_src",
+    "ct_srv_dst","ct_dst_ltm","ct_src_ltm","ct_src_dport_ltm","ct_dst_sport_ltm",
+    "ct_dst_src_ltm"
+]
 
-def load_model_feature_order(file_path):
-    """Carga el orden de las características desde un archivo JSON."""
-    try:
-        with open(file_path, 'r') as f:
-            order = json.load(f)
-        if not isinstance(order, list):
-            logging.error(f"El archivo {file_path} debe contener una lista JSON de nombres de características.")
-            return None
-        logging.info(f"Orden de características cargado desde {file_path} ({len(order)} características).")
-        return order
-    except FileNotFoundError:
-        logging.error(f"Archivo de orden de características no encontrado: {file_path}")
-        return None
-    except json.JSONDecodeError:
-        logging.error(f"Error decodificando JSON en {file_path}")
-        return None
+# --- Helper ------------------------------------------------------------------
 
-def calculate_ct_state_ttl(argus_state_str, argus_sttl_str, argus_dttl_str):
-    """Calcula la característica ct_state_ttl."""
-    try:
-        sttl = int(argus_sttl_str) if argus_sttl_str and argus_sttl_str.strip() != '' else 0
-        dttl = int(argus_dttl_str) if argus_dttl_str and argus_dttl_str.strip() != '' else 0
-    except ValueError:
-        sttl, dttl = 0, 0
+def to_float(ts_val):
+    """Convierte ts/stime a float segundos (epoch)."""
+    if isinstance(ts_val, (int, float)):
+        return float(ts_val)
+    if isinstance(ts_val, str):
+        try:
+            return float(ts_val)
+        except ValueError:
+            return dtparser.parse(ts_val).timestamp()
+    raise TypeError(f"No puedo convertir {ts_val!r} a float")
 
-    state_code = 0 # Debes implementar tu mapeo de argus_state_str a state_code
-    # Ejemplo: if "FIN" in str(argus_state_str).upper(): state_code = 1 ...
-    # Este mapeo es crucial y depende de los valores de 'state' de Argus.
+def cast_port(val: Any) -> int:
+    if val is None: return 0
+    if isinstance(val, str) and val.lower().startswith("0x"):
+        try: return int(val, 16)
+        except: pass
+    try: return int(val)
+    except: return 0
 
-    orig_ttl_range = 0
-    if sttl > 0:
-        if sttl <= 64: orig_ttl_range = 1
-        elif sttl <= 128: orig_ttl_range = 2
-        else: orig_ttl_range = 3
-    resp_ttl_range = 0
-    if dttl > 0:
-        if dttl <= 64: resp_ttl_range = 1
-        elif dttl <= 128: resp_ttl_range = 2
-        else: resp_ttl_range = 3
-    return state_code * 1000 + orig_ttl_range * 100 + resp_ttl_range # Fórmula de ejemplo
-
-def create_flow_key_from_zeek(z_conn):
-    """Crea una clave de flujo (5-tupla + timestamp entero) desde un registro de conn.log de Zeek."""
-    try:
-        # Normalizar protocolo a minúsculas
-        proto = z_conn.get('zeek_proto', z_conn.get('id',{}).get('proto','-')).lower()
-        key = (
-            z_conn.get('zeek_orig_h', z_conn.get('id',{}).get('orig_h')),
-            str(z_conn.get('zeek_orig_p', z_conn.get('id',{}).get('orig_p'))),
-            z_conn.get('zeek_resp_h', z_conn.get('id',{}).get('resp_h')),
-            str(z_conn.get('zeek_resp_p', z_conn.get('id',{}).get('resp_p'))),
+def build_key(argus: Optional[dict] = None, zeek: Optional[dict] = None) -> tuple:
+    if argus:
+        proto = str(argus.get("proto", "")).lower()
+        saddr = argus.get("saddr")
+        daddr = argus.get("daddr")
+        if proto == "icmp":
+            return (proto, saddr, daddr)
+        return (
             proto,
-            int(float(z_conn.get('zeek_ts', 0.0))) # Timestamp de inicio como entero
+            saddr,
+            cast_port(argus.get("sport")),
+            daddr,
+            cast_port(argus.get("dport")),
         )
-        return key
-    except (AttributeError, KeyError, ValueError) as e:
-        # logging.warning(f"No se pudo crear la clave de flujo para el registro de Zeek: {z_conn}. Error: {e}")
-        return None
-
-def create_flow_key_from_argus(argus_row):
-    """Crea una clave de flujo (5-tupla + timestamp entero) desde una fila de Argus."""
-    try:
-        # Normalizar protocolo a minúsculas
-        proto = argus_row.get('proto','-').lower()
-        key = (
-            argus_row.get('saddr'),
-            str(argus_row.get('sport')),
-            argus_row.get('daddr'),
-            str(argus_row.get('dport')),
+    if zeek:
+        zlog = zeek.get("zeek_log", "").lower()
+        if zlog in ("http", "ftp"):
+            proto = "tcp"
+        else:
+            proto = str(zeek.get("proto", "")).lower()
+        orig_h = zeek.get("id.orig_h")
+        resp_h = zeek.get("id.resp_h")
+        if proto == "icmp":
+            return (proto, orig_h, resp_h)
+        return (
             proto,
-            int(float(argus_row.get('stime', 0.0))) # Timestamp de inicio como entero
+            orig_h,
+            cast_port(zeek.get("id.orig_p")),
+            resp_h,
+            cast_port(zeek.get("id.resp_p")),
         )
-        return key
-    except (AttributeError, KeyError, ValueError) as e:
-        # logging.warning(f"No se pudo crear la clave de flujo para la fila de Argus: {argus_row}. Error: {e}")
-        return None
+    raise ValueError("Se necesita argus o zeek")
 
-# --- Lógica Principal de Fusión ---
-def process_and_merge_data(pcap_identifier, argus_csv_template, zeek_logs_dir_template, feature_order):
-    logging.info(f"--- Iniciando proceso de fusión para PCAP ID: {pcap_identifier} ---")
+# --- Main --------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(description="Fusiona flujos Argus+Zeek en caliente")
+    ap.add_argument("--redis_host", default=os.getenv("REDIS_HOST", "127.0.0.1"))
+    ap.add_argument("--redis_port", type=int, default=int(os.getenv("REDIS_PORT", 6379)))
+    ap.add_argument("--argus_queue", default=os.getenv("REDIS_QUEUE_ARGUS", "argus_data_stream"))
+    ap.add_argument("--zeek_queue", default=os.getenv("REDIS_QUEUE_ZEEK", "zeek_data_stream"))
+    ap.add_argument("--merge_queue", default=os.getenv("REDIS_QUEUE_MERGE", "merge_data_stream"))
+    ap.add_argument("--output_dir", default=os.getenv("OUTPUT_DIR", "/app/output_logs"))
+    ap.add_argument("--queue_size", type=int, default=int(os.getenv("QUEUE_SIZE", 100000)), help="Tamaño máximo de las colas internas de sin-match")
+    ap.add_argument("--flush_each", action="store_true")
+    ap.add_argument("--log_level", default=os.getenv("LOG_LEVEL", "INFO"))
+    args = ap.parse_args()
+
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     try:
-        r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=False)
-        r.ping() # Verificar conexión
-        logging.info(f"Conectado a Redis: {REDIS_HOST}:{REDIS_PORT}")
-    except redis.exceptions.ConnectionError as e:
-        logging.error(f"No se pudo conectar a Redis: {e}")
-        return
+        r = redis.Redis(host=args.redis_host, port=args.redis_port, decode_responses=False)
+        r.ping()
+    except redis.exceptions.RedisError as exc:
+        logging.error("❌ Redis connection failed: %s", exc)
+        sys.exit(1)
 
-    argus_csv_file = argus_csv_template.replace("<pcap_identifier>", pcap_identifier)
-    zeek_log_dir = zeek_logs_dir_template.replace("<pcap_identifier>", pcap_identifier)
-    zeek_conn_log_file = os.path.join(zeek_log_dir, "conn.json.log")
-    zeek_http_log_file = os.path.join(zeek_log_dir, "http.json.log")
-    zeek_ftp_log_file = os.path.join(zeek_log_dir, "ftp.json.log")
+    ts_run = time.strftime("%Y%m%d_%H%M%S")
+    
+    # --- Zeek: único fichero JSON Lines ---
+    zeek_dir = os.path.join(args.output_dir, "zeek")
+    os.makedirs(zeek_dir, exist_ok=True)
+    zeek_log_path = os.path.join(zeek_dir, f"{ts_run}.jsonl")
+    zeek_fh = open(zeek_log_path, "a", buffering=1)
+    logging.info("Fichero Zeek JSON creado: %s", zeek_log_path)
 
-    # 1. Cargar datos de Zeek conn.log y construir un índice para matching
-    zeek_conn_data_by_uid = {}
-    # zeek_conn_data_by_flow_key contendrá: {(5-tupla, ts_int): uid}
-    # Opcionalmente, para búsquedas con tolerancia de tiempo: {(5-tupla): [(ts_int, uid), ...]}
-    zeek_conn_data_by_flow_key_bucket = defaultdict(list)
+    # --- Argus: único fichero JSON Lines ---
+    argus_dir = os.path.join(args.output_dir, "argus") # Directorio para los logs de Argus
+    os.makedirs(argus_dir, exist_ok=True)
+    argus_log_path = os.path.join(argus_dir, f"{ts_run}.jsonl") 
+    argus_fh = open(argus_log_path, "a", buffering=1)
+    logging.info("Fichero Argus JSON creado: %s", argus_log_path)
+    
+    # --- Merge: único fichero JSON Lines ---
+    merge_dir = os.path.join(args.output_dir, "merge")
+    os.makedirs(merge_dir, exist_ok=True)
+    merge_log_path = os.path.join(merge_dir, f"{ts_run}.jsonl")
+    merge_fh = open(merge_log_path, "a", buffering=1)
+    logging.info("Escribiendo flujos fusionados JSON en: %s", merge_log_path)
+    
+    # --- Perdidos: único fichero JSON Lines ---
+    lost_dir = os.path.join(args.output_dir, "perdidos", ts_run)
+    os.makedirs(lost_dir, exist_ok=True)
+    path_a = os.path.join(lost_dir, "argus.log")
+    path_z = os.path.join(lost_dir, "zeek.log")
 
-    if os.path.exists(zeek_conn_log_file):
-        logging.info(f"Cargando {zeek_conn_log_file}...")
-        with open(zeek_conn_log_file, 'r') as f:
-            for line_num, line in enumerate(f):
-                if line.startswith('#'): continue
+    # Colas circulares para sin-match
+    argus_cache: Deque[Tuple[float, tuple, dict]] = collections.deque(maxlen=args.queue_size)
+    zeek_cache: Deque[Tuple[float, tuple, dict]] = collections.deque(maxlen=args.queue_size)
+    
+    def dump_deques():
+        # Reescribe archivos de registros de colas perdidas
+        with open(path_a, "w", buffering=1) as af:
+            for _, rec in argus_cache:
+                af.write(json.dumps(rec) + "\n")
+        with open(path_z, "w", buffering=1) as zf:
+            for _, rec in zeek_cache:
+                zf.write(json.dumps(rec) + "\n")
+
+
+    def try_match_from_caches(key: tuple, src: str, keep_on_match: bool = False) -> Optional[dict]:
+        other = zeek_cache if src == "argus" else argus_cache
+        for idx, (ok, rec) in enumerate(other):
+            if key == ok:
+                if not keep_on_match:
+                    other.rotate(-idx)
+                    other.popleft()
+                    dump_deques()
+                return rec
+        return None
+    
+    def calc_latency(data):
+        current_time = time.time()
+        original = data.get("stime")
+        if original is not None:
+            try:
+                return f"{(current_time - to_float(original)):.4f}s"
+            except TypeError:
+                return "ErrorConvTiempo"
+        return "N/A"
+    
+    def connection_features(rec: dict, history: Deque[dict]) -> dict:
+        # Aseguro que ltime en el registro corriente es int
+        if "ltime" in rec:
+            try:
+                rec["ltime"] = int(rec["ltime"])
+            except Exception:
+                pass
+
+        saddr, daddr = rec.get("saddr"), rec.get("daddr")
+        sport, dport = cast_port(rec.get("sport")), cast_port(rec.get("dport"))
+        service = rec.get("service", "-")
+
+        def same(field_vals):
+            cnt = 0
+            for h in history:
+                if "ltime" in h:
+                    try:
+                        h["ltime"] = int(h["ltime"])
+                    except Exception:
+                        pass
+                if all(h.get(f) == v for f, v in field_vals):
+                    cnt += 1
+            return cnt
+
+        return {
+            "ct_srv_src": same([("service", service), ("saddr", saddr), ("ltime", rec.get("ltime"))]),
+            "ct_srv_dst": same([("service", service), ("daddr", daddr), ("ltime", rec.get("ltime"))]),
+            "ct_dst_ltm": same([("daddr", daddr), ("ltime", rec.get("ltime"))]),
+            "ct_src_ltm": same([("saddr", saddr), ("ltime", rec.get("ltime"))]),
+            "ct_src_dport_ltm": same([("saddr", saddr), ("dport", dport), ("ltime", rec.get("ltime"))]),
+            "ct_dst_sport_ltm": same([("daddr", daddr), ("sport", sport), ("ltime", rec.get("ltime"))]),
+            "ct_dst_src_ltm": same([("saddr", saddr), ("daddr", daddr), ("ltime", rec.get("ltime"))]),
+        }
+        
+    def merge_records(argus_j: dict, zeek_j: dict):
+        merged = argus_j.copy()
+        
+        # 1. is_sm_ips_ports siempre
+        merged["is_sm_ips_ports"] = int(
+            merged.get("saddr") == merged.get("daddr")
+            and cast_port(merged.get("sport")) == cast_port(merged.get("dport"))
+        )
+
+        key = build_key(argus=merged)
+        # 2. Inicializamos a 0 todos los campos “no comunes”
+        merged["trans_depth"] = 0
+        merged["response_body_len"] = 0
+        merged["ct_flw_http_mthd"] = 0
+        merged["is_ftp_login"] = 0
+        merged["ct_ftp_cmd"] = 0
+
+        # 3. Ajuste según tipo de log de Zeek
+        if  zeek_j["zeek_log"] == "http":
+            # ➜ HTTP
+            MAP_COUNT_HTTP[key] += 1
+            merged["service"] = "http"
+            merged["trans_depth"] = int(zeek_j.get("trans_depth", 0))
+            merged["response_body_len"] = int(zeek_j.get("response_body_len", 0))
+
+            # ct_flw_http_mthd: contamos en el buffer HTTP
+            merged["ct_flw_http_mthd"] = MAP_COUNT_HTTP[key]
+            
+        elif zeek_j["zeek_log"] == "ftp":
+            # ➜ FTP
+            merged["service"] = "ftp"
+            
+            user = zeek_j.get("user", "")
+            passwd = zeek_j.get("password", "")
+
+            if isinstance(user, str): user = user.strip()
+            if isinstance(passwd, str): passwd = passwd.strip()
+
+            merged["is_ftp_login"] = int(bool(user) and bool(passwd))
+
+            # ct_ftp_cmd: contamos en el buffer FTP
+            cmd = zeek_j.get("command", "")
+            if isinstance(cmd, str) and cmd.strip():
+                MAP_COUNT_FTP[key] += 1
+                
+            merged["ct_ftp_cmd"] = MAP_COUNT_FTP[key]
+            
+        else:
+            # ➜ CONN
+            merged["service"] = zeek_j.get("service", "-")
+        
+        # 4. Ahora calculamos los 7 contadores CT* usando el histórico de conexiones
+        ct = connection_features(merged, LAST_100)
+        for k in ZEOK_EXTRA:
+            merged[k] = ct[k]
+
+        # 5. Escritura y alineamiento de campos
+        ordered = { key: merged.get(key) for key in OUTPUT_FIELDS }
+        merge_fh.write(json.dumps(ordered) + "\n")
+        if args.flush_each:
+            merge_fh.flush()
+            os.fsync(merge_fh.fileno())
+            
+        # 6) Publicación en Redis para GPU (como CSV)
+        csv_line = ",".join(str(merged.get(c,"")) for c in ML_COLS)
+        r.lpush(args.merge_queue, csv_line)
+
+        # 6. Registramos en el buffer global (para contar conexiones futuras)
+        LAST_100.append(merged)
+
+    # --- Bucle principal -----------------------------------------------------
+    skip_first_argus = True
+    while True:
+        processed = False
+        # Argus primero
+        payload_a = r.lpop(args.argus_queue)
+        if payload_a:
+            processed = True
+            if skip_first_argus:
+                skip_first_argus = False
+                logging.info("Omitiendo cabecera de Argus")
+            else:
                 try:
-                    log = json.loads(line)
-                    uid = log.get('uid')
-                    if uid:
-                        data_to_store = {
-                            'zeek_service': log.get('service', '-'),
-                            'zeek_is_sm_ips_ports': log.get('is_sm_ips_ports_custom', False),
-                            'zeek_swin': log.get('swin_initial_custom', 0),
-                            'zeek_dwin': log.get('dwin_initial_custom', 0),
-                            'zeek_ct_srv_src': log.get('ct_srv_src_custom', 0),
-                            'zeek_ct_srv_dst': log.get('ct_srv_dst_custom', 0),
-                            'zeek_ct_dst_ltm': log.get('ct_dst_ltm_custom', 0),
-                            'zeek_ct_src_ltm': log.get('ct_src_ltm_custom', 0),
-                            'zeek_ct_src_dport_ltm': log.get('ct_src_dport_ltm_custom', 0),
-                            'zeek_ct_dst_sport_ltm': log.get('ct_dst_sport_ltm_custom', 0),
-                            'zeek_ct_dst_src_ltm': log.get('ct_dst_src_ltm_custom', 0),
-                            # Campos para matching
-                            'zeek_orig_h': log.get('id', {}).get('orig_h'),
-                            'zeek_orig_p': str(log.get('id', {}).get('orig_p')),
-                            'zeek_resp_h': log.get('id', {}).get('resp_h'),
-                            'zeek_resp_p': str(log.get('id', {}).get('resp_p')),
-                            'zeek_proto': log.get('proto', log.get('id', {}).get('proto', '-')).lower(),
-                            'zeek_ts': float(log.get('ts', 0.0))
-                        }
-                        zeek_conn_data_by_uid[uid] = data_to_store
+                    a_data = json.loads(payload_a.decode())
+                    for t in ("stime", "ltime"):
+                        if t in a_data:
+                            try:
+                                a_data[t] = int(round(to_float(a_data[t])))
+                            except Exception:
+                                pass
+                    argus_fh.write(json.dumps(a_data) + "\n")
+                    if args.flush_each:
+                        argus_fh.flush()
+                        os.fsync(argus_fh.fileno())
                         
-                        # Para el índice de matching: (saddr, sport, daddr, dport, proto) -> lista de (timestamp, uid)
-                        flow_5_tuple = (data_to_store['zeek_orig_h'], data_to_store['zeek_orig_p'],
-                                        data_to_store['zeek_resp_h'], data_to_store['zeek_resp_p'],
-                                        data_to_store['zeek_proto'])
-                        zeek_conn_data_by_flow_key_bucket[flow_5_tuple].append((data_to_store['zeek_ts'], uid))
-                except json.JSONDecodeError:
-                    logging.warning(f"Saltando línea JSON malformada en {zeek_conn_log_file}:{line_num+1}")
-                except KeyError as e:
-                    logging.warning(f"Clave faltante en entrada de conn.log: {e} - Línea: {line.strip()}")
-    else:
-        logging.warning(f"Archivo no encontrado: {zeek_conn_log_file}")
+                    proto = str(a_data.get("proto", "")).lower()
+                    if proto == "tcp":
+                        key_a = build_key(argus=a_data)
 
-    # 2. Cargar y agregar datos de Zeek http.log (como antes)
-    http_aggs = defaultdict(lambda: {'ct_flw_http_mthd': 0, 'trans_depth_sum': 0, 'res_bdy_len_sum': 0})
-    if os.path.exists(zeek_http_log_file):
-        logging.info(f"Cargando {zeek_http_log_file}...")
-        # ... (lógica de http_aggs como en tu script anterior) ...
-        with open(zeek_http_log_file, 'r') as f:
-            for line_num, line in enumerate(f):
-                if line.startswith('#'): continue
-                try:
-                    log = json.loads(line)
-                    uid = log.get('uid')
-                    if uid:
-                        if log.get('method') in ['GET', 'POST']: http_aggs[uid]['ct_flw_http_mthd'] += 1
-                        http_aggs[uid]['trans_depth_sum'] += log.get('trans_depth', 0)
-                        http_aggs[uid]['res_bdy_len_sum'] += log.get('resp_body_len', 0)
-                except json.JSONDecodeError: logging.warning(f"Saltando línea JSON malformada en {zeek_http_log_file}:{line_num+1}")
+                        # Si había acumulación HTTP para esta key → merge final
+                        if key_a in HTTP_ACC:
+                            final = HTTP_ACC.pop(key_a)
+                            z_final = final["last_z"]
+                            # Sobreescribimos con los valores agregados
+                            z_final["trans_depth"]       = final["max_depth"]
+                            z_final["response_body_len"] = final["sum_len"]
+                            merge_records(a_data, z_final)
 
-    # 3. Cargar y agregar datos de Zeek ftp.log (como antes)
-    ftp_aggs = defaultdict(lambda: {'is_ftp_login_attempt': False, 'ct_ftp_cmd': 0, '_user_seen': False})
-    if os.path.exists(zeek_ftp_log_file):
-        logging.info(f"Cargando {zeek_ftp_log_file}...")
-        # ... (lógica de ftp_aggs como en tu script anterior) ...
-        with open(zeek_ftp_log_file, 'r') as f:
-            for line_num, line in enumerate(f):
-                if line.startswith('#'): continue
-                try:
-                    log = json.loads(line)
-                    uid = log.get('uid')
-                    if uid:
-                        ftp_aggs[uid]['ct_ftp_cmd'] += 1
-                        cmd = log.get('command', '').upper()
-                        if cmd == 'USER': ftp_aggs[uid]['_user_seen'] = True
-                        elif cmd == 'PASS' and ftp_aggs[uid]['_user_seen']:
-                            ftp_aggs[uid]['is_ftp_login_attempt'] = True # Indica intento de login
-                except json.JSONDecodeError: logging.warning(f"Saltando línea JSON malformada en {zeek_ftp_log_file}:{line_num+1}")
-
-    # 4. Procesar CSV de Argus y fusionar
-    merged_records_count = 0
-    if os.path.exists(argus_csv_file):
-        logging.info(f"Procesando y fusionando {argus_csv_file}...")
-        with open(argus_csv_file, 'r', newline='') as f_argus:
-            # Asume que 'ra -n' NO se usa, y la primera línea es la cabecera
-            # Si 'ra -n' SÍ se usa, pasa fieldnames=ARGUS_FIELD_NAMES
-            # Es más robusto si 'ra' SIEMPRE produce cabecera.
-            reader = csv.DictReader(f_argus)
-            for argus_row in reader:
-                # Crear un registro final inicializado con defaults según feature_order
-                final_record = {key: None for key in feature_order} # O usa 0, "-", etc. como default
-
-                # Popular con datos de Argus (mapea nombres de Argus a nombres UNSW-NB15)
-                final_record['srcip'] = argus_row.get('saddr')
-                final_record['sport'] = argus_row.get('sport')
-                final_record['dstip'] = argus_row.get('daddr')
-                final_record['dsport'] = argus_row.get('dport') # Nombre en UNSW-NB15
-                final_record['proto'] = argus_row.get('proto','-').lower()
-                final_record['state'] = argus_row.get('state','-')
-                final_record['dur'] = float(argus_row.get('dur', 0.0))
-                final_record['sbytes'] = int(argus_row.get('bytes', 0)) # Asumiendo 'bytes' es sbytes si dir no se usa para diferenciar
-                # Si Argus da sbytes/dbytes explícitamente, úsalos:
-                # final_record['sbytes'] = int(argus_row.get('sbytes', 0))
-                final_record['dbytes'] = int(argus_row.get('dbytes', 0))
-                final_record['sttl'] = int(argus_row.get('sttl', 0))
-                final_record['dttl'] = int(argus_row.get('dttl', 0))
-                final_record['sloss'] = int(argus_row.get('sloss', 0))
-                final_record['dloss'] = int(argus_row.get('dloss', 0))
-                final_record['sload'] = float(argus_row.get('sload', 0.0))
-                final_record['dload'] = float(argus_row.get('dload', 0.0))
-                final_record['spkts'] = int(argus_row.get('pkts', 0)) # Similar a sbytes
-                # final_record['spkts'] = int(argus_row.get('spkts', 0))
-                final_record['dpkts'] = int(argus_row.get('dpkts', 0))
-                final_record['stcpb'] = int(argus_row.get('stcpb', 0))
-                final_record['dtcpb'] = int(argus_row.get('dtcpb', 0))
-                final_record['smeansz'] = int(argus_row.get('smeansz', 0))
-                final_record['dmeansz'] = int(argus_row.get('dmeansz', 0))
-                final_record['sjit'] = float(argus_row.get('sjit', 0.0))
-                final_record['djit'] = float(argus_row.get('djit', 0.0))
-                argus_stime_float = float(argus_row.get('stime', 0.0))
-                final_record['stime'] = int(argus_stime_float)
-                final_record['ltime'] = int(float(argus_row.get('ltime', 0.0)))
-                final_record['sintpkt'] = float(argus_row.get('sintpkt', 0.0))
-                final_record['dintpkt'] = float(argus_row.get('dintpkt', 0.0))
-                final_record['tcprtt'] = float(argus_row.get('tcprtt', 0.0))
-                final_record['synack'] = float(argus_row.get('synack', 0.0))
-                final_record['ackdat'] = float(argus_row.get('ackdat', 0.0))
-
-                # Lógica de Matching con Zeek
-                matched_zeek_uid = None
-                argus_flow_5_tuple = (final_record['srcip'], final_record['sport'],
-                                      final_record['dstip'], final_record['dsport'],
-                                      final_record['proto'])
-
-                if argus_flow_5_tuple in zeek_conn_data_by_flow_key_bucket:
-                    for zeek_ts, uid in zeek_conn_data_by_flow_key_bucket[argus_flow_5_tuple]:
-                        if abs(argus_stime_float - zeek_ts) <= TIMESTAMP_MATCH_TOLERANCE:
-                            matched_zeek_uid = uid
-                            break
-                
-                # Poblar con datos de Zeek si hay match
-                if matched_zeek_uid and matched_zeek_uid in zeek_conn_data_by_uid:
-                    z_conn = zeek_conn_data_by_uid[matched_zeek_uid]
-                    final_record['service'] = z_conn.get('zeek_service', '-')
-                    final_record['is_sm_ips_ports'] = 1 if z_conn.get('zeek_is_sm_ips_ports') else 0
-                    final_record['swin'] = z_conn.get('zeek_swin', 0)
-                    final_record['dwin'] = z_conn.get('zeek_dwin', 0)
-                    final_record['ct_srv_src'] = z_conn.get('zeek_ct_srv_src', 0)
-                    final_record['ct_srv_dst'] = z_conn.get('zeek_ct_srv_dst', 0)
-                    final_record['ct_dst_ltm'] = z_conn.get('zeek_ct_dst_ltm', 0)
-                    final_record['ct_src_ltm'] = z_conn.get('zeek_ct_src_ltm', 0)
-                    final_record['ct_src_dport_ltm'] = z_conn.get('zeek_ct_src_dport_ltm', 0)
-                    final_record['ct_dst_sport_ltm'] = z_conn.get('zeek_ct_dst_sport_ltm', 0)
-                    final_record['ct_dst_src_ltm'] = z_conn.get('zeek_ct_dst_src_ltm', 0)
-
-                    z_http = http_aggs.get(matched_zeek_uid, defaultdict(int))
-                    final_record['ct_flw_http_mthd'] = z_http.get('ct_flw_http_mthd',0)
-                    final_record['trans_depth'] = z_http.get('trans_depth_sum',0)
-                    final_record['res_bdy_len'] = z_http.get('res_bdy_len_sum',0)
-                    
-                    z_ftp = ftp_aggs.get(matched_zeek_uid, defaultdict(int))
-                    final_record['is_ftp_login'] = 1 if z_ftp.get('is_ftp_login_attempt') else 0
-                    final_record['ct_ftp_cmd'] = z_ftp.get('ct_ftp_cmd',0)
-                else: # Defaults para campos de Zeek si no hay match
-                    final_record['service'] = argus_row.get('service', '-') # Intentar obtener de Argus si está
-                    # ... (y el resto de los campos de Zeek con sus defaults 0 o '-')
-
-                # Calcular ct_state_ttl (usa campos de Argus)
-                final_record['ct_state_ttl'] = calculate_ct_state_ttl(
-                    argus_row.get('state'), argus_row.get('sttl'), argus_row.get('dttl')
-                )
-                
-                # Asegurar que todos los campos en feature_order estén presentes (con defaults si es necesario)
-                # y crear una lista ordenada para enviar, o enviar el dict directamente.
-                output_dict_to_redis = {feat: final_record.get(feat, 0) for feat in feature_order}
-                # El default '0' puede no ser apropiado para todos los campos (ej. strings como 'service')
-                # Ajusta el default según el tipo esperado o usa None y maneja en el consumidor.
-                # Para strings, un default de "-" podría ser mejor que 0.
-                # Ejemplo de default más específico:
-                for feat in feature_order:
-                    if feat not in output_dict_to_redis or output_dict_to_redis[feat] is None:
-                        if any(s in feat.lower() for s in ['ip', 'proto', 'service', 'state', 'attack_cat']):
-                            output_dict_to_redis[feat] = "-"
                         else:
-                            output_dict_to_redis[feat] = 0
-                
-                try:
-                    r.rpush(MERGED_DATA_REDIS_KEY, json.dumps(output_dict_to_redis))
-                    merged_records_count += 1
+                            # Si no era un HTTP pendiente, seguimos con el proceso normal
+                            z_match = try_match_from_caches(key_a, "argus")
+                            if z_match:
+                                merge_records(a_data, z_match)
+                            else:
+                                argus_cache.append((key_a, a_data))
+                                dump_deques()
+                                
+                    elif proto not in ("tcp", "udp", "icmp"):
+                        a_data["is_sm_ips_ports"] = int(
+                            a_data.get("saddr") == a_data.get("daddr")
+                            and cast_port(a_data.get("sport")) == cast_port(a_data.get("dport"))
+                        )
+
+                        a_data["trans_depth"] = 0
+                        a_data["response_body_len"] = 0
+                        a_data["ct_flw_http_mthd"] = 0
+                        a_data["is_ftp_login"] = 0
+                        a_data["ct_ftp_cmd"] = 0
+
+                        ct = connection_features(a_data, LAST_100)
+                        a_data.update(ct)
+                        
+                        ordered = { key: a_data.get(key) for key in OUTPUT_FIELDS }
+                        merge_fh.write(json.dumps(ordered) + "\n")
+                        if args.flush_each:
+                            merge_fh.flush(); os.fsync(merge_fh.fileno())
+
+                        LAST_100.append(a_data)
+                        csv_line = ",".join(str(a_data.get(c,"")) for c in ML_COLS)
+                        r.lpush(args.merge_queue, csv_line)
+                        continue 
+                    else:
+                        key_a = build_key(argus=a_data)
+                        z_match = try_match_from_caches(key_a, "argus")
+                        if z_match:
+                            merge_records(a_data, z_match)
+                        else:
+                            argus_cache.append((key_a, a_data))
+                            dump_deques()
                 except Exception as e:
-                    logging.error(f"Error enviando a Redis: {e}. Record: {output_dict_to_redis}")
+                    logging.error("Error procesando Argus: %s", e)
 
-            logging.info(f"Proceso de fusión completado. {merged_records_count} registros enviados a Redis (key: {MERGED_DATA_REDIS_KEY}).")
-    else:
-        logging.error(f"ERROR: No se encontró el archivo CSV de Argus en {argus_csv_file}")
+        # Luego Zeek
+        payload_z = r.lpop(args.zeek_queue)
+        if payload_z:
+            processed = True
+            try:
+                z_data = json.loads(payload_z.decode())
+                zeek_fh.write(json.dumps(z_data) + "\n")
+                if args.flush_each:
+                    zeek_fh.flush()
+                    os.fsync(zeek_fh.fileno())
+                    
+                key_z = build_key(zeek=z_data)
+                
+                zeek_type = z_data.get("zeek_log", "").lower()
+                if zeek_type == "http":
+                    # 1) Acumula response_body_len y guarda el mensaje de mayor trans_depth
+                    depth = int(z_data.get("trans_depth", 0))
+                    body_len = int(z_data.get("response_body_len", 0))
 
-if __name__ == '__main__':
-    # Cargar el orden de las características primero
-    # Asume que model_feature_order.json está en el mismo directorio que este script.
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    feature_order_file_path = os.path.join(script_dir, MODEL_FEATURE_ORDER_FILE)
-    
-    model_features = load_model_feature_order(feature_order_file_path)
-    if model_features is None:
-        logging.error("No se pudo cargar el orden de las características. Saliendo.")
-        exit(1)
+                    acc = HTTP_ACC.setdefault(key_z, {"sum_len": 0, "max_depth": 0, "last_z": None})
+                    acc["sum_len"] += body_len
+                    if depth > acc["max_depth"]:
+                        acc["max_depth"] = depth
+                        
+                    acc["last_z"] = z_data.copy()
 
-    parser = argparse.ArgumentParser(description="Fusiona CSV de Argus y logs JSON de Zeek, y envía a Redis.")
-    parser.add_argument('--pcap_id', required=True, help="Identificador base del PCAP para encontrar archivos de entrada.")
-    parser.add_argument('--argus_csv_template', default="/input_argus_data/<pcap_identifier>.argus.csv", help="Plantilla de ruta para CSV de Argus.")
-    parser.add_argument('--zeek_logs_dir_template', default="/input_zeek_logs/<pcap_identifier>_zeeklogs", help="Plantilla de ruta para directorio de logs de Zeek.")
-    
-    args = parser.parse_args()
-    process_and_merge_data(args.pcap_id, args.argus_csv_template, args.zeek_logs_dir_template, model_features)
+                    zeek_cache.append((key_z, z_data))
+                    dump_deques()
+                else:
+                    keep = zeek_type == "ftp"
+                    a_match = try_match_from_caches(key_z, "zeek", keep_on_match=keep)
+                    if a_match:
+                        merge_records(a_match, z_data)
+                    else:
+                        zeek_cache.append((key_z, z_data))
+                        dump_deques()
+            except Exception as e:
+                logging.error("Error procesando Zeek: %s", e)
+
+        if not processed:
+            time.sleep(0.05)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("Ctrl-C — saliendo.")

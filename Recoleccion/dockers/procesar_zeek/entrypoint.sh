@@ -1,27 +1,27 @@
 #!/bin/sh
 set -e
 
-# ── Parámetros de conexión ─────────────────────────────────────────────
-TCP_HOST=${TCPDUMP_HOST:-127.0.0.1}
-TCP_PORT=${TCPDUMP_BROADCAST_PORT:-5555}
-ZEEK_SCRIPT="/usr/local/zeek/share/zeek/site/local.zeek"
+CAPTURE_IF=${CAPTURE_INTERFACE:-ens3}
+REDIS_HOST=${REDIS_HOST:-127.0.0.1}
+REDIS_PORT=${REDIS_PORT:-6379}
+REDIS_KEY=${REDIS_QUEUE_ZEEK:-zeek_data_stream}
 
-# ── FIFO para mantener un flujo continuo ───────────────────────────────
-mkfifo /tmp/pcap.pipe
+export ZEEK_AF_PACKET_BUFFER_SIZE=1073741824
+ZEEK_HOME=/usr/local/zeek
 
-# 1) Receptor TCP ▸ FIFO  (socat se reconecta si el socket cae)
-socat -u TCP:${TCP_HOST}:${TCP_PORT},interval=2,retry=600 - \
-      > /tmp/pcap.pipe &
-SOCAT_PID=$!
+echo "[Zeek] cd ${ZEEK_HOME} && zeekctl deploy"
+cd "${ZEEK_HOME}"
 
-# 2) Zeek procesa la tubería sin terminar aunque el socket se reinicie
-zeek -C -r /tmp/pcap.pipe "$ZEEK_SCRIPT" policy/tuning/json-logs.zeek &
-ZEEK_PID=$!
+if ! zeekctl deploy ; then
+    echo "[Zeek] ERROR: deploy falló; dump diag:"
+    DZ diag || true
+    exit 1
+fi
 
-# 3) Publicador de logs Zeek → Redis
-python3 /app/zeek_to_redis.py &
-FEED_PID=$!
+echo "[Zeek] Zeek corriendo con PID ${ZEEK_PID}. Esperando a logs JSON..."
 
-# 4) Limpieza ordenada
-trap 'kill $SOCAT_PID $ZEEK_PID $FEED_PID 2>/dev/null' TERM INT
-wait $ZEEK_PID
+echo "[Zeek] Iniciando zeek_to_redis.py..."
+python3 /usr/local/bin/zeek_to_redis.py \
+    --redis_host "${REDIS_HOST}" \
+    --redis_port "${REDIS_PORT}" \
+    --redis_key "${REDIS_KEY}"

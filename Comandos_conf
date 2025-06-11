@@ -1,4 +1,24 @@
-sudo ethtool -K ens4 gro off lro off
-sudo sysctl -w net.core.rmem_max=268435456
+# Optimizar interfaz de red
+sudo ethtool -K ens3 gro off lro off
+sudo ethtool -K ens3 tso off gso off ufo off sg off rxvlan off txvlan off
+sudo ethtool -K ens3 rx off tx off
+sudo ethtool -G ens3 rx 2048 tx 2048 
+
+# Aumentar buffers de red
+sudo tee /etc/sysctl.d/99-zeek-argus.conf > /dev/null << EOF
+net.core.wmem_max         = 67108864
+net.core.wmem_default     = 262144
+net.core.rmem_max         = 67108864
+net.core.rmem_default     = 262144
+
+net.ipv4.tcp_rmem = 4096 32768 67108864
+net.ipv4.tcp_wmem = 4096 32768 67108864
+
+net.core.netdev_max_backlog = 500000
+net.core.busy_poll = 50
+vm.overcommit_memory = 1
+EOF
+sudo sysctl --system
+
 echo 'fs.file-max = 1048576' | sudo tee -a /etc/sysctl.conf
-wg genkey | sudo tee /etc/wireguard/server.key | wg pubkey | sudo tee /etc/wireguard/server.pub
+

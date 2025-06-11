@@ -2,58 +2,40 @@ services:
   # 1. Redis ─ almacén final
   redis:
     image: redis:7.4.4-alpine
-    container_name: servicio_redis
-    ports:       # expone 6379 en el host → accesible vía 127.0.0.1:6379
+    container_name: redis
+    networks:
+      - tfg_network
+    ports:
       - "6379:6379"
     volumes:
       - redis_data_vm:/data
     command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"]
     restart: unless-stopped
 
-  # 2. Captura de tráfico con tcpdump
-  capturar-tcpdump:
-    build: ./capturar_tcpdump
-    container_name: contenedor_capturar_tcpdump
-    cap_add: [NET_ADMIN, NET_RAW]
-    environment:  
-      - CAPTURE_INTERFACE=ens4 
-      - TCPDUMB_BROADCAST_PORT=5555
-    network_mode: host 
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep socat >/dev/null || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
   # 3. Argus (flujo TCP 5555 → puerto 561)
   procesar-argus:
     build: ./procesar_argus
-    container_name: contenedor_procesar_argus
-    network_mode: host
-    depends_on:
-      capturar-tcpdump:
-        condition: service_healthy
+    container_name: procesar-argus
+    network_mode: host 
     environment:
-      - TCPDUMP_HOST=127.0.0.1
-      - TCPDUMP_BROADCAST_PORT=5555
+      # - TCPDUMP_HOST=127.0.0.1
+      # - TCPDUMP_BROADCAST_PORT=5555
+      - CAPTURE_INTERFACE=ens3
       - ARGUS_PORT=561
       - ARGUS_INSTANCE=liveargus
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pidof argus >/dev/null || echo 'ERROR: Argus no está corriendo'"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
 
   # 4. ra → Redis
   procesar-ra:
     build: ./procesar_ra
-    container_name: contenedor_procesar_ra
-    network_mode: host
+    container_name: procesar-ra
+    network_mode: host 
     depends_on:
       procesar-argus:
-        condition: service_healthy
+        condition: service_started
       redis:
         condition: service_started
     environment:
@@ -62,50 +44,57 @@ services:
       - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - REDIS_QUEUE_ARGUS=argus_data_stream
-      - RA_FIELDS=stime,proto,saddr,sport,daddr,dport,state,ltime,spkts,dpkts, \
-                  sbytes,dbytes,sttl,dttl,sload,dload,sloss,dloss,sintpkt,dintpkt,\
-                  sjit,djit,stcpb,dtcpb,tcprtt,synack,ackdat,smeansz,dmeansz,dur
     restart: unless-stopped
 
   # 5. Zeek → Redis
   procesar-zeek:
     build: ./procesar_zeek
-    container_name: contenedor_procesar_zeek
+    container_name: procesar-zeek
     working_dir: /output_zeek
-    network_mode: host
+    network_mode: host 
     depends_on:
-      capturar-tcpdump:
-        condition: service_healthy
       redis:
         condition: service_started
     environment:
-      - TCPDUMP_HOST=127.0.0.1
-      - TCPDUMP_BROADCAST_PORT=5555
+      # - TCPDUMP_HOST=127.0.0.1
+      # - TCPDUMP_BROADCAST_PORT=5555
+      - CAPTURE_INTERFACE=ens3
       - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
       - REDIS_QUEUE_ZEEK=zeek_data_stream
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    deploy:
+      resources:
+        limits:
+          cpus: '6.0'
+          memory: 12000M
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep zeek >/dev/null"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
 
-  # 6. (opcional) Fusión Argus+Zeek
-  #   Descomenta cuando tengas un “consumer” en streaming listo
-  # procesar-merge:
-  #   build: ./procesar_merge
-  #   container_name: contenedor_procesar_merge
-  #   network_mode: host
-  #   depends_on:
-  #     - redis
-  #   environment:
-  #     - REDIS_HOST=127.0.0.1
-  #     - REDIS_PORT=6379
-  #     - REDIS_QUEUE_MERGE=merge_data_stream
-  #     - REDIS_QUEUE_ARGUS=argus_data_stream
-  #     - REDIS_QUEUE_ZEEK=zeek_data_stream
-  #   restart: unless-stopped
+  # 6. Fusión Argus+Zeek
+  procesar-merge:
+    build: ./procesar_merge
+    container_name: procesar-merge
+    network_mode: host
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=127.0.0.1
+      - REDIS_PORT=6379
+      - REDIS_QUEUE_MERGE=merge_data_stream
+      - REDIS_QUEUE_ARGUS=argus_data_stream
+      - REDIS_QUEUE_ZEEK=zeek_data_stream
+      - OUTPUT_DIR=/app/output_logs
+      - LOG_EVERY=10
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./merged_logs:/app/output_logs
+    restart: unless-stopped
+
+networks:
+  tfg_network:
+    driver: bridge
 
 volumes:
   redis_data_vm:

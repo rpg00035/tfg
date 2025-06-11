@@ -1,0 +1,13 @@
+srcip,sport,dstip,dport,proto,state,dur,sbytes,dbytes,sttl,dttl,sloss,dloss,service,sload,dload,spkts,dpkts,stcpb,dtcpb,smeansz,dmeansz,trans_depth,response_body_len,sjit,djit,stime,ltime,sintpkt,dintpkt,tcprtt,synack,ackdat,is_sm_ips_ports,ct_flw_http_mthd,is_ftp_login,ct_ftp_cmd,ct_srv_src,ct_srv_dst,ct_dst_ltm,ct_src_ltm,ct_src_dport_ltm,ct_dst_sport_ltm,ct_dst_src_ltm,attack_cat,label
+
+Cuales tengo de argus:
+srcip,sport,dstip,dport,proto,state,dur,sbytes,dbytes,sttl,dttl,sloss,dloss,sload,dload,spkts,dpkts,stcpb,dtcpb,smeansz,dmeansz,sjit,djit,stime,ltime,sintpkt,dintpkt,tcprtt,synack,ackdat
+
+Cuales tengo de zeek (tcp, udp, icmp) y argus (resto):
+ct_srv_src, ct_srv_dst, ct_dst_ltm, ct_src_ltm, ct_src_dport_ltm, ct_dst_sport_ltm, ct_dst_src_ltm
+
+Cuales me faltan:
+trans_depth, response_body_len, service, is_sm_ips_ports, ct_flw_http_mthd, is_ftp_login, ct_ftp_cmd
+
+Cuales no son necesarios:
+swin, dwin, ct_state_ttl

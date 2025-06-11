@@ -1,13 +1,18 @@
-FROM debian:bullseye-slim
+FROM debian:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Instalar dependencias y Argus
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    argus-server socat procps \
+      argus-server procps tcpdump iproute2 \     
+      wget ca-certificates build-essential \
+      libpcap-dev bison flex \
     && rm -rf /var/lib/apt/lists/*
 
-COPY wait-for-it.sh /app/wait-for-it.sh 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /app/wait-for-it.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 561/udp
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -1,13 +1,24 @@
 FROM debian:latest
 
-# Instala ra (en paquete argus-client), socat y Python
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends argus-client socat python3 python3-pip && \
-    pip3 install --break-system-packages redis && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Copiamos scripts
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      argus-client \   
+      redis-tools \   
+      python3 \
+      python3-pip \
+      procps \        
+      wget \
+      ca-certificates \
+      iproute2 \      
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --break-system-packages --no-cache-dir redis
+
 COPY ra_to_redis.py /app/ra_to_redis.py
+RUN chmod +x /app/ra_to_redis.py
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh 
 

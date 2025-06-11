@@ -4,15 +4,16 @@ from pyspark.sql.functions import col, when
 from cuml.ensemble import RandomForestClassifier as cuRF
 from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.model_selection import StratifiedKFold
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, parallel_backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
 import joblib
 import json
-import sys
 import os
+
+os.environ["CUPY_NO_PINNED_MEMORY"] = "1"
 
 num_folds = 15
 
@@ -27,7 +28,7 @@ spark = SparkSession.builder \
 spark.conf.set("spark.sql.debug.maxToStringFields", 500)
 
 # ─── Cargar dataset ya fusionado ─
-dataset_path = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_balanceado.csv"
+dataset_path = "/home/ruben/TFG/Entrenamiento/Datos_entrenamiento/Datos_corregidos/Datos_fusionados/Dataset_definitivo.csv"
 df = spark.read.csv(dataset_path, header=True, inferSchema=True)
 print(f"✅ Dataset cargado desde {dataset_path}")
 
@@ -35,12 +36,17 @@ print(f"✅ Dataset cargado desde {dataset_path}")
 df = df.withColumn("attack_type", when(col("label") == 1, "Attack").otherwise("Normal"))
 
 numeric_features = [
-    "sport", "dport", "dur", "sbytes", "dbytes", "sttl", "dttl", "sloss", "dloss",
-    "sload", "dload", "spkts", "dpkts", "stcpb", "dtcpb", "smeansz",
-    "dmeansz", "sjit", "djit", "stime", "ltime",
-    "sintpkt", "dintpkt", "tcprtt", "synack", "ackdat",
-    "label" # Se incluye para el cast, pero se excluirá de las features de entrenamiento
+    "sport","dport","dur","sbytes","dbytes","sttl","dttl","sloss","dloss",
+    "sload","dload","spkts","dpkts","stcpb","dtcpb","smeansz","dmeansz",
+    "sjit","djit","stime","ltime","sintpkt","dintpkt","tcprtt","synack","ackdat",
+    "trans_depth","response_body_len",
+    "is_sm_ips_ports","ct_flw_http_mthd","is_ftp_login","ct_ftp_cmd",
+    "ct_srv_src","ct_srv_dst","ct_dst_ltm","ct_src_ltm",
+    "ct_src_dport_ltm","ct_dst_sport_ltm","ct_dst_src_ltm",
+    "label"
 ]
+
+
 
 for col_name in numeric_features:
     if col_name in df.columns:
@@ -108,7 +114,7 @@ y_test = test_pd["target"].values.astype(np.int32)
 param_grid = [
     {
         "n_estimators": 300,      
-        "max_depth": 22,           
+        "max_depth": 20,           
         "max_features": "sqrt",    
         "min_samples_leaf": 9,    
         "min_samples_split": 6    
@@ -135,10 +141,11 @@ def evaluate_params(params, X, y, cv):
         fold_num += 1
     return np.mean(accuracies)
 
-results = Parallel(n_jobs=-1, backend="loky")(
-    delayed(lambda p: (p, evaluate_params(p, X_train, y_train, cv)))(params)
-    for params in param_grid
-)
+with parallel_backend("threading", n_jobs=-1):
+    results = Parallel()(
+        delayed(lambda p: (p, evaluate_params(p, X_train, y_train, cv)))(params)
+        for params in param_grid
+    )
 
 best_params, best_cv_accuracy = max(results, key=lambda x: x[1])
 print(f"Mejores hiperparámetros: {best_params} con precisión CV: {best_cv_accuracy*100:.2f}%")

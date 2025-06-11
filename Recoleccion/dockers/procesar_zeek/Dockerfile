@@ -1,19 +1,24 @@
 FROM zeek/zeek:latest
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG ZEEK_HOME=/usr/local/zeek     # ← ruta real en la imagen
+
 # Paquetes extra: socat para el pipe TCP, python3 y redis-py
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends socat python3 python3-pip && \
-    pip3 install --break-system-packages redis && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends python3 python3-pip procps iproute2 ca-certificates htop && \
+    rm -rf /var/lib/apt/lists/* && \
+    pip3 install --break-system-packages --no-cache-dir redis
 
-# Copiamos scripts y utilidades
-COPY local.zeek /usr/local/zeek/share/zeek/site/local.zeek
-COPY zeek_to_redis.py /app/zeek_to_redis.py
-COPY wait-for-it.sh /app/wait-for-it.sh 
+COPY node.cfg /usr/local/zeek/etc/node.cfg
+RUN printf 'mailto =\nLogDir = /output_zeek\n' \
+    > /usr/local/zeek/etc/zeekctl.cfg
+
+COPY local.zeek ${ZEEK_HOME}/share/zeek/site/local.zeek
+COPY zeek_to_redis.py /usr/local/bin/zeek_to_redis.py
+RUN chmod +x /usr/local/bin/zeek_to_redis.py
+
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /app/wait-for-it.sh
-
-# Directorio donde Zeek escribirá sus logs JSON
+RUN chmod +x /entrypoint.sh
 WORKDIR /output_zeek
-
 ENTRYPOINT ["/entrypoint.sh"]

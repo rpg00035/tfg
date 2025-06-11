@@ -1,0 +1,13 @@
+Reporte de Clasificación - n300_d20_fsqrt_l9_s6_cv15
+
+Precisión General en Conjunto de Prueba: 99.47%
+Precisión Específica en Tipos de Ataque (excluyendo 'Normal'): 97.57%
+
+              precision    recall  f1-score   support
+
+      Normal       1.00      1.00      1.00    443105
+      Attack       0.98      0.98      0.98     64332
+
+    accuracy                           0.99    507437
+   macro avg       0.99      0.99      0.99    507437
+weighted avg       0.99      0.99      0.99    507437

